@@ -1,0 +1,10 @@
+# Ignore Mac system files
+.DS_store
+
+# Notebook checkpoints
+.ipynb_checkpoints
+./.ipynb_checkpoints
+
+# Rough notebooks
+scratch.ipynb
+optimization_with_torch.ipynb
