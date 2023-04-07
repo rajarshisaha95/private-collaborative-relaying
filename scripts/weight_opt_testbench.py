@@ -13,7 +13,7 @@ from src.utils import (
     plot_losses,
     evaluate_log_barriers,
 )
-from src.optimization import gauss_seidel_weight_opt, gauss_seidel_weight_opt_priv
+from src.optimization import NodeWeightsUpdate, NodeWeightsUpdatePriv
 from src.objectives import evaluate_tiv
 
 
@@ -43,9 +43,7 @@ def simple_network_test():
 
     weights_orig = weights_init.clone().detach()
 
-    print("Hello!")
-
-    weights_opt, losses = gauss_seidel_weight_opt(
+    weights_opt, losses = NodeWeightsUpdate().gauss_seidel_weight_opt(
         num_iters=num_iters_gs,
         A_init=weights_init,
         p=p,
@@ -115,7 +113,7 @@ def simple_network_test_private():
 
     weights_orig = weights_init.clone().detach()
 
-    weights_opt, losses = gauss_seidel_weight_opt_priv(
+    weights_opt, losses = NodeWeightsUpdatePriv().gauss_seidel_weight_opt_priv(
         num_iters=num_iters_gs,
         A_init=weights_init,
         p=p,

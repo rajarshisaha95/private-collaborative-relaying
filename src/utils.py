@@ -84,11 +84,11 @@ def evaluate_log_barriers(
     for i in range(n):
         for j in range(n):
             if j != i:
-                Bt[i][j] = -torch.log(
+                Ct[i][j] = (
                     E[i][j] * sigma
                     - torch.sqrt(2 * torch.log(1.25 / D[i][j])) * 2 * A[i][j] * R
                 )
-                Ct[i][j] = E[i][j] * sigma - torch.sqrt(2 * torch.log(1.25 / D[i][j]))
+                Bt[i][j] = -torch.log(Ct[i][j])
 
     return Bt, Ct
 
