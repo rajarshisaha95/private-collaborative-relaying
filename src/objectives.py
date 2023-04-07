@@ -111,3 +111,61 @@ def local_tiv(
     t4 = (s_i - 1) ** 2 + 2 * (s_i - 1) * (torch.sum(s) - n + 1)
 
     return t1 + t2 + t3 + t4
+
+
+def local_log_barrier(
+    E: torch.Tensor,
+    D: torch.Tensor,
+    sigma: torch.Tensor,
+    node_idx: int,
+    node_weights: torch.Tensor,
+    R: torch.float,
+):
+    """Evaluate the log-barrier penalty corresponding to a particular node
+    :param E: epsilon values for peer-to-peer privacy
+    :param D: delta values for peer-to-peer privacy
+    :param sigma: Privacy noise variance
+    :param node_idx: Node index for which local TIV is being evaluated
+    :param node_weights: (Trainable) weights of node_idx node
+    :param R: Radius of the Euclidean ball in which the data vectors lie
+    """
+
+    assert node_weights.requires_grad == True, "Node weights are not trainable!"
+
+    n = E.shape[0]  # Number of clients
+    i = node_idx
+
+    t = 0
+    for j in range(n):
+        if j != i:
+            t = t - torch.log(
+                E[i][j] * sigma
+                - torch.sqrt(2 * torch.log(1.25 / D[i][j])) * 2 * node_weights[j] * R
+            )
+
+    return t
+
+
+def local_tiv_priv(
+    p: torch.Tensor,
+    A: torch.Tensor,
+    P: torch.Tensor,
+    R: torch.float,
+    eta: torch.float,
+    E: torch.Tensor,
+    D: torch.Tensor,
+    sigma: torch.Tensor,
+    node_idx: int,
+    node_weights: torch.Tensor,
+):
+    """Evaluate the contribution of a node's weights to the TIV with the log-barrier penalty
+    :param eta: Regularization strength of log barrier penalty
+    """
+
+    assert node_weights.requires_grad == True, "Node weights are not trainable!"
+
+    return eta * local_tiv(
+        p=p, P=P, A=A, R=R, node_idx=node_idx, node_weights=node_weights
+    ) + local_log_barrier(
+        E=E, D=D, sigma=sigma, node_idx=node_idx, node_weights=node_weights, R=R
+    )
