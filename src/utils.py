@@ -5,6 +5,75 @@ from torch import nn
 import matplotlib.pyplot as plt
 
 
+def evaluate_tiv(
+    p: torch.Tensor,
+    A: torch.Tensor,
+    P: torch.Tensor,
+    R: torch.float,
+):
+    """Evaluate the upper bound on topology induced variance
+    :param p: Array of transmission probabilities from each of the clients to the PS
+    :param A: Matrix of weights
+    :param P: Matrix of probabilities for intermittent connectivity amongst clients
+    :param R: Radius of the Euclidean ball in which the data vectors lie
+    """
+
+    n = len(p)
+
+    # Validate inputs
+    assert n == A.shape[0] == A.shape[1], "p and A dimension mismatch!"
+    assert n == P.shape[0] == P.shape[1], "p and P dimension mismatch!"
+
+    # TIV
+    S = 0
+
+    # First term (squared terms)
+    for i in range(n):
+        for l in range(n):
+            for j in range(n):
+                S += p[j] * (1 - p[j]) * P[i][j] * P[l][j] * A[i][j] * A[l][j]
+
+    # Second term (cross-terms)
+    for i in range(n):
+        for j in range(n):
+            S += P[i][j] * p[j] * (1 - P[i][j]) * A[i][j] * A[i][j]
+
+    # Third term due to correlation between reciprocal links
+    for i in range(n):
+        for l in range(n):
+            assert P[i][l] == P[l][i], "Matrix P must be symmetric."
+            E = P[i][l]
+            S += p[i] * p[l] * (E - P[i][l] * P[l][i]) * A[l][i] * A[i][l]
+
+    # Compute the bias terms
+    s = torch.zeros(n)
+    for i in range(n):
+        for j in range(n):
+            s[i] += p[j] * P[i][j] * A[i][j]
+
+    # Fourth term due to bias
+    S += torch.sum(s - 1) ** 2
+
+    return S * (R**2) / n**2
+
+
+def evaluate_piv(p: torch.Tensor, P: torch.Tensor, sigma: torch.Tensor, d: int):
+    """
+    Evaluates the privacy induced variance
+        :param d: Dimension of the data vectors
+    """
+
+    n = P.shape[0]  # number of clients
+
+    t = 0
+    for i in range(n):
+        for j in range(n):
+            if j != i:
+                t = t + p[j] * P[i][j]
+
+    return (sigma**2 * d) / (n**2) * t
+
+
 def init_random_weights(P: torch.Tensor):
     """Initialize random weights that respect the network topology
     :param P: Matrix of probabilities for intermittent connectivity amongst clients
@@ -35,16 +104,12 @@ def init_random_weights_priv_noise(
     for i in range(n):
         for j in range(n):
             if j != i:
-                T[i][j] = (
-                    torch.sqrt(2 * torch.log(1.25 / D[i][j]))
-                    * 2
-                    * A[i][j]
-                    * R
-                    / E[i][j]
+                T[i][j] = torch.sqrt(2 * torch.log(1.25 / D[i][j])) * (
+                    2 * A[i][j] * R / E[i][j]
                 )
 
     reg_noise = 1e-2
-    sigma = torch.max(T).float() + reg_noise
+    sigma = torch.max(T) + reg_noise
 
     return A, sigma
 
@@ -88,10 +153,9 @@ def evaluate_log_barriers(
     for i in range(n):
         for j in range(n):
             if j != i:
-                Ct[i][j] = (
-                    E[i][j] * sigma
-                    - torch.sqrt(2 * torch.log(1.25 / D[i][j])) * 2 * A[i][j] * R
-                )
+                Ct[i][j] = E[i][j] * sigma - torch.sqrt(
+                    2 * torch.log(1.25 / D[i][j])
+                ) * (2 * A[i][j] * R)
                 Bt[i][j] = -torch.log(Ct[i][j])
 
     return Bt, Ct
@@ -106,3 +170,4 @@ def plot_losses(losses, title, xlabel, ylabel, outfile):
     plt.ylabel(ylabel)
     plt.tight_layout()
     plt.savefig(outfile, dpi=300)
+    plt.close()

@@ -3,58 +3,6 @@
 import torch
 
 
-def evaluate_tiv(
-    p: torch.Tensor,
-    A: torch.Tensor,
-    P: torch.Tensor,
-    R: torch.float,
-):
-    """Evaluate the upper bound on topology induced variance
-    :param p: Array of transmission probabilities from each of the clients to the PS
-    :param A: Matrix of weights
-    :param P: Matrix of probabilities for intermittent connectivity amongst clients
-    :param R: Radius of the Euclidean ball in which the data vectors lie
-    """
-
-    n = len(p)
-
-    # Validate inputs
-    assert n == A.shape[0] == A.shape[1], "p and A dimension mismatch!"
-    assert n == P.shape[0] == P.shape[1], "p and P dimension mismatch!"
-
-    # TIV
-    S = 0
-
-    # First term (squared terms)
-    for i in range(n):
-        for l in range(n):
-            for j in range(n):
-                S += p[j] * (1 - p[j]) * P[i][j] * P[l][j] * A[i][j] * A[l][j]
-
-    # Second term (cross-terms)
-    for i in range(n):
-        for j in range(n):
-            S += P[i][j] * p[j] * (1 - P[i][j]) * A[i][j] * A[i][j]
-
-    # Third term due to correlation between reciprocal links
-    for i in range(n):
-        for l in range(n):
-            assert P[i][l] == P[l][i], "Matrix P must be symmetric."
-            E = P[i][l]
-            S += p[i] * p[l] * (E - P[i][l] * P[l][i]) * A[l][i] * A[i][l]
-
-    # Compute the bias terms
-    s = torch.zeros(n)
-    for i in range(n):
-        for j in range(n):
-            s[i] += p[j] * P[i][j] * A[i][j]
-
-    # Fourth term due to bias
-    S += torch.sum(s - 1) ** 2
-
-    return S * (R**2) / n**2
-
-
 def local_tiv(
     p: torch.Tensor,
     A: torch.Tensor,
@@ -168,4 +116,70 @@ def local_tiv_priv(
         p=p, P=P, A=A, R=R, node_idx=node_idx, node_weights=node_weights
     ) + local_log_barrier(
         E=E, D=D, sigma=sigma, node_idx=node_idx, node_weights=node_weights, R=R
+    )
+
+
+def piv(p: torch.Tensor, P: torch.Tensor, sigma: torch.Tensor, d: int):
+    """
+    Evaluates the privacy induced variance
+        :param d: Dimension of the data vectors
+    """
+
+    assert sigma.requires_grad == True, "Privacy noise is not trainable!"
+
+    n = P.shape[0]  # number of clients
+
+    t = 0
+    for i in range(n):
+        for j in range(n):
+            if j != i:
+                t = t + p[j] * P[i][j]
+
+    return (sigma**2 * d) / (n**2) * t
+
+
+def log_barrier_penalty(
+    A: torch.Tensor,
+    E: torch.Tensor,
+    D: torch.Tensor,
+    sigma: torch.float,
+    R: torch.float,
+):
+    """
+    Evaluates the cumulative log-barrier penalty across all peer-to-peer privacy constraints
+    """
+
+    assert sigma.requires_grad == True, "Privacy noise is not trainable!"
+
+    n = A.shape[0]
+    B = 0  # cumulative log-barrier penalty
+
+    for i in range(n):
+        for j in range(n):
+            if j != i:
+                B = B - torch.log(
+                    E[i][j] * sigma
+                    - torch.sqrt(2 * torch.log(1.25 / D[i][j])) * 2 * A[i][j] * R
+                )
+
+    return B
+
+
+def piv_log_barrier(
+    p: torch.Tensor,
+    A: torch.Tensor,
+    P: torch.Tensor,
+    R: torch.float,
+    eta: torch.float,
+    E: torch.Tensor,
+    D: torch.Tensor,
+    sigma: torch.Tensor,
+    d: int,
+):
+    """
+    Evaluates the log-barrier penalized privacy induced variance
+    """
+
+    return eta * piv(p=p, P=P, sigma=sigma, d=d) + log_barrier_penalty(
+        A=A, E=E, D=D, sigma=sigma, R=R
     )
