@@ -101,7 +101,8 @@ def simple_network_test_private():
     radius = 1.0  # Domain: Euclidean ball
 
     # Regularization parameters
-    eta = 100
+    eta_pr = 100        # Privacy
+    eta_nnw = 100       # Non-negative weights
 
     # Optimizer parameters
     num_iters_gs = 20  # Gauss-Seidel iteration
@@ -121,7 +122,8 @@ def simple_network_test_private():
         R=radius,
         E=E,
         D=D,
-        eta=eta,
+        eta_pr=eta_pr,
+        eta_nnw=eta_nnw,
         sigma=sigma_init,
         weights_lr=weights_lr,
         weights_num_iters=weights_num_iters,

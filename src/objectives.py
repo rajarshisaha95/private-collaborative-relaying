@@ -1,6 +1,7 @@
 # Objective functions for optimization
 
 import torch
+from loguru import logger
 
 
 def evaluate_tiv(
@@ -121,7 +122,7 @@ def local_log_barrier(
     node_weights: torch.Tensor,
     R: torch.float,
 ):
-    """Evaluate the log-barrier penalty corresponding to a particular node
+    """Evaluate the log-barrier penalty for peer-to-peer privacy constraint corresponding to a particular node
     :param E: epsilon values for peer-to-peer privacy
     :param D: delta values for peer-to-peer privacy
     :param sigma: Privacy noise variance
@@ -146,12 +147,27 @@ def local_log_barrier(
     return t
 
 
+def local_nonneg_weights_penalty(node_weights: torch.Tensor):
+    """Evaluate the log-barrier penalty for the non-negative weight constraint"""
+
+    assert node_weights.requires_grad == True, "Node weights are not trainable!"
+
+    n = len(node_weights)  # number of nodes
+    logger.info(f"No. of nodes: {n}")
+
+    t = 0
+    for j in range(n):
+        t = t - torch.log(node_weights[j])
+    return t
+
+
 def local_tiv_priv(
     p: torch.Tensor,
     A: torch.Tensor,
     P: torch.Tensor,
     R: torch.float,
-    eta: torch.float,
+    eta_pr: torch.float,
+    eta_nnw: torch.float,
     E: torch.Tensor,
     D: torch.Tensor,
     sigma: torch.Tensor,
@@ -159,13 +175,17 @@ def local_tiv_priv(
     node_weights: torch.Tensor,
 ):
     """Evaluate the contribution of a node's weights to the TIV with the log-barrier penalty
-    :param eta: Regularization strength of log barrier penalty
+    :param eta_pr: Regularization strength of log-barrier penalty for privacy constraint
+    :param eta_nn: Regularization strength of log-barrier penalty for non-negative weights constraint
     """
 
     assert node_weights.requires_grad == True, "Node weights are not trainable!"
 
-    return eta * local_tiv(
-        p=p, P=P, A=A, R=R, node_idx=node_idx, node_weights=node_weights
-    ) + local_log_barrier(
-        E=E, D=D, sigma=sigma, node_idx=node_idx, node_weights=node_weights, R=R
+    return (
+        local_tiv(p=p, P=P, A=A, R=R, node_idx=node_idx, node_weights=node_weights)
+        + (1 / eta_pr)
+        * local_log_barrier(
+            E=E, D=D, sigma=sigma, node_idx=node_idx, node_weights=node_weights, R=R
+        )
+        + (1 / eta_nnw) * local_nonneg_weights_penalty(node_weights=node_weights)
     )

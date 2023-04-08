@@ -64,11 +64,6 @@ class NodeWeightsUpdate:
             optimizer.step()
             optimizer.zero_grad()
 
-            # Projection for non-negative weight constraint
-            clipper = ZeroClipper()
-            if i % clipper.frequency == 0:
-                model.apply(clipper)
-
             losses.append(loss)
 
             if i % 100 == 0:
@@ -184,14 +179,16 @@ class NodeWeightsUpdatePriv(NodeWeightsUpdate):
             R: torch.float,
             E: torch.Tensor,
             D: torch.Tensor,
-            eta: torch.float,
+            eta_pr: torch.float,
+            eta_nnw: torch.float,
             sigma: torch.Tensor,
         ):
 
             super().__init__(A=A, node_idx=node_idx, p=p, P=P, R=R)
             self.E = E
             self.D = D
-            self.eta = eta
+            self.eta_pr = eta_pr
+            self.eta_nnw = eta_nnw
             self.sigma = sigma
 
         def forward(self):
@@ -202,7 +199,8 @@ class NodeWeightsUpdatePriv(NodeWeightsUpdate):
                 A=self.A,
                 P=self.P,
                 R=self.R,
-                eta=self.eta,
+                eta_pr=self.eta,
+                eta_nn=self.eta_nn,
                 E=self.E,
                 D=self.D,
                 sigma=self.sigma,
