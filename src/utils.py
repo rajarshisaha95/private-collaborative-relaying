@@ -57,8 +57,8 @@ class ZeroClipper(object):
 
     def __call__(self, module):
 
-        if hasattr(module, "A"):
-            w = module.A.data
+        if hasattr(module, 'node_weights'):
+            w = module.node_weights.data
             nn.ReLU(inplace=True)(w)
 
 
