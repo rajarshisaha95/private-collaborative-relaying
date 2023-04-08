@@ -52,14 +52,18 @@ def init_random_weights_priv_noise(
 class ZeroClipper(object):
     """Clip the weights to zero if they are negative"""
 
-    def __init__(self, frequency=1):
+    def __init__(self, proj, frequency=1):
         self.frequency = frequency
+        self.proj = proj  # variable to project
 
     def __call__(self, module):
-
-        if hasattr(module, 'node_weights'):
+        if hasattr(module, "node_weights") and self.proj == "node_weights":
             w = module.node_weights.data
             nn.ReLU(inplace=True)(w)
+
+        elif hasattr(module, "sigma_param") and self.proj == "sigma":
+            s = module.sigma_param.data
+            nn.ReLU(inplace=True)(s)
 
 
 def evaluate_log_barriers(
