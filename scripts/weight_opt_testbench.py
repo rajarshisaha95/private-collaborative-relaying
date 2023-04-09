@@ -284,5 +284,5 @@ def simple_network_test_private_joint_opt():
 
 if __name__ == "__main__":
     # fire.Fire(simple_network_test)
-    # fire.Fire(simple_network_test_private)
-    fire.Fire(simple_network_test_private_joint_opt)
+    fire.Fire(simple_network_test_private)
+    # fire.Fire(simple_network_test_private_joint_opt)

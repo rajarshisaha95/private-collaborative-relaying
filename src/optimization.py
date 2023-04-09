@@ -198,8 +198,8 @@ class NodeWeightsUpdatePriv(NodeWeightsUpdate):
                 A=self.A,
                 P=self.P,
                 R=self.R,
-                eta_pr=self.eta,
-                eta_nn=self.eta_nn,
+                eta_pr=self.eta_pr,
+                eta_nnw=self.eta_nnw,
                 E=self.E,
                 D=self.D,
                 sigma=self.sigma,
@@ -218,7 +218,8 @@ class NodeWeightsUpdatePriv(NodeWeightsUpdate):
         R: torch.float,
         E: torch.Tensor,
         D: torch.Tensor,
-        eta: torch.float,
+        eta_pr: torch.float,
+        eta_nnw: torch.float,
         sigma: torch.float,
         weights_lr=torch.float,
         weights_num_iters=int,
@@ -231,7 +232,8 @@ class NodeWeightsUpdatePriv(NodeWeightsUpdate):
         :param R: Radius of the Euclidean ball in which the data vectors lie
         :param E: epsilon values for peer-to-peer privacy
         :param D: delta values for peer-to-peer privacy
-        :param eta: Regularization strength of log barrier penalty (parametrization of the central path)
+        :param eta_pr: Regularization strength of log barrier penalty for privacy constraints
+        :param eta_nnw: Regularization strength of log barrier penalty for non-negative weight constraints
         :param sigma: Privacy noise variance
         :param weights_lr: Learning rate for node weights
         :param weights_num_iters: Number of iterations for learning node weights
@@ -242,7 +244,16 @@ class NodeWeightsUpdatePriv(NodeWeightsUpdate):
 
         # Create a node weight optimization model
         m = self.Model_NodeWeights(
-            A=A, node_idx=node_idx, p=p, P=P, R=R, E=E, D=D, eta=eta, sigma=sigma
+            A=A,
+            node_idx=node_idx,
+            p=p,
+            P=P,
+            R=R,
+            E=E,
+            D=D,
+            eta_pr=eta_pr,
+            eta_nnw=eta_nnw,
+            sigma=sigma,
         )
 
         # Instantiate optimizer
@@ -270,7 +281,8 @@ class NodeWeightsUpdatePriv(NodeWeightsUpdate):
         R: torch.float,
         E: torch.Tensor,
         D: torch.Tensor,
-        eta: torch.float,
+        eta_pr: torch.float,
+        eta_nnw: torch.float,
         sigma: torch.float,
         weights_lr=torch.float,
         weights_num_iters=int,
@@ -283,7 +295,8 @@ class NodeWeightsUpdatePriv(NodeWeightsUpdate):
             :param R: Radius of the Euclidean ball in which the data vectors lie
             :param E: epsilon values for peer-to-peer privacy
             :param D: delta values for peer-to-peer privacy
-            :param eta: Regularization strength of log barrier penalty (parametrization of the central path)
+            :param eta_pr: Regularization strength of log barrier penalty for privacy constraints
+            :param eta_pr: Regularization strength of log barrier penalty for non-negative weight constraints
             :param sigma: Privacy noise variance
             :param weights_lr: Learning rate for node weights
             :param weights_num_iters: Number of iterations for learning node weights
@@ -308,7 +321,8 @@ class NodeWeightsUpdatePriv(NodeWeightsUpdate):
                     R=R,
                     E=E,
                     D=D,
-                    eta=eta,
+                    eta_pr=eta_pr,
+                    eta_nnw=eta_nnw,
                     sigma=sigma,
                     weights_lr=weights_lr,
                     weights_num_iters=weights_num_iters,
@@ -380,7 +394,6 @@ class JointNodeWeightPrivUpdate(NodeWeightsUpdatePriv):
         ), "Trainable privacy noise variance not found!"
 
         for i in range(num_iters):
-
             loss = model()
             loss.backward()
             optimizer.step()
@@ -470,7 +483,7 @@ class JointNodeWeightPrivUpdate(NodeWeightsUpdatePriv):
         sigma = sigma_init
 
         tiv_losses = []
-        piv_losses = []      
+        piv_losses = []
 
         for iters in range(num_iters):
             logger.info(f"Gauss-Seidel iteration: {iters}/{num_iters}")

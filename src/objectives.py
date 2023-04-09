@@ -101,7 +101,6 @@ def local_nonneg_weights_penalty(node_weights: torch.Tensor):
     assert node_weights.requires_grad == True, "Node weights are not trainable!"
 
     n = len(node_weights)  # number of nodes
-    logger.info(f"No. of nodes: {n}")
 
     t = 0
     for j in range(n):
