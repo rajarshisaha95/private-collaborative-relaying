@@ -197,21 +197,25 @@ def check_privacy_constraints(
     E: torch.Tensor,
     D: torch.Tensor,
     R: torch.float,
-) -> bool:
+):
     """Check if a given pair (A, sigma) is feasible for a given set of privacy constraints"""
 
     n = A.shape[0]
 
+    T_max = 0
     for i in range(n):
         for j in range(n):
             if j != i:
-                priv_level = torch.sqrt(2 * torch.log(1.25 / D[i][j])) * (
-                    2 * A[i][j] * R / sigma
+                t = torch.sqrt(2 * torch.log(1.25 / D[i][j])) * (
+                    2 * A[i][j] * R / E[i][j]
                 )
-                if E[i][j] < priv_level:
-                    return False
-    
-    return True
+                if T_max < t:
+                    T_max = t
+
+    if sigma < T_max:
+        return (False, T_max)
+    else:
+        return (True, T_max)
 
 
 def plot_losses(losses, title, xlabel, ylabel, outfile):

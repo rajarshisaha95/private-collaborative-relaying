@@ -23,8 +23,8 @@ from src.optimization import (
     JointNodeWeightPrivUpdate,
 )
 
-SEED = 0
-# torch.manual_seed(SEED)
+SEED = 1234
+torch.manual_seed(SEED)
 
 
 def simple_network_test():
@@ -206,7 +206,7 @@ def simple_network_test_private_init_weights_from_noise():
     weights_num_iters = 1000
 
     # Initialization values
-    priv_noise_init = 10.0
+    priv_noise_init = 1.0
     weights_init = init_weights_from_priv_noise(
         P=P, E=E, D=D, R=radius, sigma=torch.tensor(priv_noise_init)
     )
@@ -275,7 +275,7 @@ def simple_network_test_private_joint_opt_init_weights_random():
     delta = 1e-3
     D = delta * P
     eps1 = 1e3  # Trustworthy neighbors
-    eps2 = 1e-2  # Non-trustworthy neighbors
+    eps2 = 0.1  # Non-trustworthy neighbors
     E = eps2 * torch.ones([num_clients, num_clients])
     for i in range(num_clients):
         E[i][i] = eps1
@@ -292,11 +292,11 @@ def simple_network_test_private_joint_opt_init_weights_random():
     eta_nnp = 100  # Non-negative privacy noise variance
 
     # Optimizer parameters
-    num_iters_gs = 15  # Gauss-Seidel iteration
+    num_iters_gs = 20  # Gauss-Seidel iteration
     weights_lr = 1e-4
     weights_num_iters = 1000
-    priv_lr = 2e-4
-    priv_num_iters = 6000
+    priv_lr = 5e-2
+    priv_num_iters = 1000
 
     # Initialization values
     weights_init, priv_noise_init = init_random_weights_priv_noise(
@@ -518,10 +518,10 @@ if __name__ == "__main__":
 
     # Weight optimization with a fixed privacy-noise variance
     # (Initial sigma: fixed. Initial weights: random respecting privacy constraints w.r.t. sigma)
-    fire.Fire(simple_network_test_private_init_weights_from_noise)
+    # fire.Fire(simple_network_test_private_init_weights_from_noise)
 
     # Joint optimization of weights and privacy-noise variance (Initial weights: random)
-    # fire.Fire(simple_network_test_private_joint_opt_init_weights_random)
+    fire.Fire(simple_network_test_private_joint_opt_init_weights_random)
 
     # Joint optimization of weights and privacy-noise variance
     # (Initial sigma: fixed. Initial weights: random respecting privacy constraints w.r.t. sigma)

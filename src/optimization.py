@@ -6,7 +6,7 @@ from torch import nn
 from loguru import logger
 
 from src.objectives import local_tiv, local_tiv_priv, piv_log_barrier
-from src.utils import ZeroClipper, evaluate_tiv, evaluate_piv
+from src.utils import ZeroClipper, evaluate_tiv, evaluate_piv, check_privacy_constraints
 
 
 class NodeWeightsUpdate:
@@ -66,7 +66,7 @@ class NodeWeightsUpdate:
             optimizer.zero_grad()
 
             # Projection for non-negative weight constraint
-            clipper = ZeroClipper()
+            clipper = ZeroClipper(proj="node_weights")
             if i % clipper.frequency == 0:
                 model.apply(clipper)
 
@@ -213,28 +213,6 @@ class NodeWeightsUpdatePriv(NodeWeightsUpdate):
             )
 
             return forward_loss
-
-    def training_loop_node_weights(self, model: nn.Module, optimizer, num_iters: int):
-        """Training loop for node weights"""
-
-        losses = []
-
-        assert (
-            hasattr(model, "node_weights") and model.node_weights.requires_grad == True
-        ), "Trainable node weights not found!"
-
-        for i in range(num_iters):
-            loss = model()
-            loss.backward()
-            optimizer.step()
-            optimizer.zero_grad()
-
-            losses.append(loss)
-
-            if i % 100 == 0:
-                logger.info(f"Iteration: {i}/{num_iters}")
-
-        return losses
 
     def update_node_weights(
         self,
@@ -429,10 +407,20 @@ class JointNodeWeightPrivUpdate(NodeWeightsUpdatePriv):
             optimizer.step()
             optimizer.zero_grad()
 
+            # Projection for respecting privacy constraints
+            feasible, sigma_min = check_privacy_constraints(
+                A=model.A, sigma=model.sigma_param, E=model.E, D=model.D, R=model.R
+            )
+            if feasible == False:
+                logger.info(f"Projecting sigma: {model.sigma_param.data} to sigma_min: {sigma_min}")
+                reg = 1e-6      # Regularization to ensure that log-barrier is not -Inf
+                model.sigma_param.data = torch.tensor(sigma_min + reg)
+
             losses.append(loss)
 
             if i % 100 == 0:
                 logger.info(f"Iteration: {i}/{num_iters}")
+                logger.info(f"Privacy noise: {model.sigma_param.data}")
 
         return losses
 
@@ -484,6 +472,8 @@ class JointNodeWeightPrivUpdate(NodeWeightsUpdatePriv):
         # Update the value of privacy noise variance
         m.sigma_param.requires_grad = False
         sigma = m.sigma_param
+
+        logger.info(f"Privacy noise: {m.sigma_param.data}")
 
         del m
 

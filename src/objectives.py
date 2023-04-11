@@ -123,7 +123,7 @@ def local_tiv_priv(
 ):
     """Evaluate the contribution of a node's weights to the TIV with the log-barrier penalty
     :param eta_pr: Regularization strength of log-barrier penalty for privacy constraint
-    :param eta_nn: Regularization strength of log-barrier penalty for non-negative weights constraint
+    :param eta_nnw: Regularization strength of log-barrier penalty for non-negative weights constraint
     """
 
     assert node_weights.requires_grad == True, "Node weights are not trainable!"
@@ -184,12 +184,21 @@ def log_barrier_penalty(
     return B
 
 
+def nonneg_priv_noise_penalty(sigma: torch.Tensor):
+    """Evaluate the log-barrier penalty for the non-negative privacy noise constraint"""
+
+    assert sigma.requires_grad == True, "Privacy noise is not trainable!"
+
+    return -torch.log(sigma)
+
+
 def piv_log_barrier(
     p: torch.Tensor,
     A: torch.Tensor,
     P: torch.Tensor,
     R: torch.float,
-    eta: torch.float,
+    eta_pr: torch.float,
+    eta_nnp: torch.float,
     E: torch.Tensor,
     D: torch.Tensor,
     sigma: torch.Tensor,
@@ -197,8 +206,11 @@ def piv_log_barrier(
 ):
     """
     Evaluates the log-barrier penalized privacy induced variance
+    :param eta_nnp: Regularization strength of log-barrier penalty for non-negative privacy noise constraint
     """
 
-    return eta * piv(p=p, P=P, sigma=sigma, d=d) + log_barrier_penalty(
-        A=A, E=E, D=D, sigma=sigma, R=R
+    return (
+        piv(p=p, P=P, sigma=sigma, d=d)
+        + (1 / eta_pr) * log_barrier_penalty(A=A, E=E, D=D, sigma=sigma, R=R)
+        + (1 / eta_nnp) * nonneg_priv_noise_penalty(sigma=sigma)
     )
