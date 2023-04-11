@@ -65,6 +65,11 @@ class NodeWeightsUpdate:
             optimizer.step()
             optimizer.zero_grad()
 
+            # Projection for non-negative weight constraint
+            clipper = ZeroClipper()
+            if i % clipper.frequency == 0:
+                model.apply(clipper)
+
             losses.append(loss)
 
             if i % 100 == 0:
@@ -209,6 +214,28 @@ class NodeWeightsUpdatePriv(NodeWeightsUpdate):
 
             return forward_loss
 
+    def training_loop_node_weights(self, model: nn.Module, optimizer, num_iters: int):
+        """Training loop for node weights"""
+
+        losses = []
+
+        assert (
+            hasattr(model, "node_weights") and model.node_weights.requires_grad == True
+        ), "Trainable node weights not found!"
+
+        for i in range(num_iters):
+            loss = model()
+            loss.backward()
+            optimizer.step()
+            optimizer.zero_grad()
+
+            losses.append(loss)
+
+            if i % 100 == 0:
+                logger.info(f"Iteration: {i}/{num_iters}")
+
+        return losses
+
     def update_node_weights(
         self,
         A: torch.Tensor,
@@ -296,7 +323,7 @@ class NodeWeightsUpdatePriv(NodeWeightsUpdate):
             :param E: epsilon values for peer-to-peer privacy
             :param D: delta values for peer-to-peer privacy
             :param eta_pr: Regularization strength of log barrier penalty for privacy constraints
-            :param eta_pr: Regularization strength of log barrier penalty for non-negative weight constraints
+            :param eta_nnw: Regularization strength of log barrier penalty for non-negative weight constraints
             :param sigma: Privacy noise variance
             :param weights_lr: Learning rate for node weights
             :param weights_num_iters: Number of iterations for learning node weights
@@ -351,7 +378,8 @@ class JointNodeWeightPrivUpdate(NodeWeightsUpdatePriv):
             D: torch.Tensor,
             R: torch.float,
             d: int,
-            eta: torch.float,
+            eta_pr: torch.float,
+            eta_nnp: torch.float,
             sigma: torch.Tensor,
         ):
             super().__init__()
@@ -362,7 +390,8 @@ class JointNodeWeightPrivUpdate(NodeWeightsUpdatePriv):
             self.D = D
             self.R = R
             self.d = d
-            self.eta = eta
+            self.eta_pr = eta_pr
+            self.eta_nnp = eta_nnp
 
             # Make a copy of the privacy noise variance trainable
             self.sigma_param = nn.Parameter(sigma)
@@ -375,7 +404,8 @@ class JointNodeWeightPrivUpdate(NodeWeightsUpdatePriv):
                 A=self.A,
                 P=self.P,
                 R=self.R,
-                eta=self.eta,
+                eta_pr=self.eta_pr,
+                eta_nnp=self.eta_nnp,
                 E=self.E,
                 D=self.D,
                 sigma=self.sigma_param,
@@ -399,11 +429,6 @@ class JointNodeWeightPrivUpdate(NodeWeightsUpdatePriv):
             optimizer.step()
             optimizer.zero_grad()
 
-            # Projection for non-negative privacy noise variance
-            clip_noise = ZeroClipper(proj="sigma_param")
-            if i % clip_noise.frequency == 0:
-                model.apply(clip_noise)
-
             losses.append(loss)
 
             if i % 100 == 0:
@@ -420,7 +445,8 @@ class JointNodeWeightPrivUpdate(NodeWeightsUpdatePriv):
         E: torch.Tensor,
         D: torch.Tensor,
         d: int,
-        eta: torch.float,
+        eta_pr: torch.float,
+        eta_nnp: torch.float,
         sigma: torch.float,
         priv_lr=torch.float,
         priv_num_iters=int,
@@ -435,7 +461,16 @@ class JointNodeWeightPrivUpdate(NodeWeightsUpdatePriv):
 
         # Create a privacy noise optimization model
         m = self.Model_PrivNoise(
-            A=A, p=p, P=P, E=E, D=D, R=R, d=d, eta=eta, sigma=sigma
+            A=A,
+            p=p,
+            P=P,
+            E=E,
+            D=D,
+            R=R,
+            d=d,
+            eta_pr=eta_pr,
+            eta_nnp=eta_nnp,
+            sigma=sigma,
         )
 
         # Instantiate optimizer
@@ -464,7 +499,9 @@ class JointNodeWeightPrivUpdate(NodeWeightsUpdatePriv):
         E: torch.Tensor,
         D: torch.Tensor,
         d: int,
-        eta: torch.float,
+        eta_pr: torch.float,
+        eta_nnw: torch.float,
+        eta_nnp: torch.float,
         sigma_init: torch.float,
         weights_lr=torch.float,
         weights_num_iters=int,
@@ -473,6 +510,9 @@ class JointNodeWeightPrivUpdate(NodeWeightsUpdatePriv):
     ):
         """Jointly optimize the collaboration weights and privacy noise variance
         :param d: Dimension of the data vectors
+        :param eta_pr: Regularization strength of log barrier penalty for privacy constraints
+        :param eta_nnw: Regularization strength of log barrier penalty for non-negative weight constraints
+        :param eta_nnp: Regularization strength of log barrier penalty for non-negative privacy noise constraint
         :param sigma_init: Initial (feasible) privacy noise variance
         :param priv_lr: Learning rate for privacy noise variance
         :param priv_num_iters: Number of iterations for learning privacy noise variance
@@ -498,7 +538,8 @@ class JointNodeWeightPrivUpdate(NodeWeightsUpdatePriv):
                     R=R,
                     E=E,
                     D=D,
-                    eta=eta,
+                    eta_pr=eta_pr,
+                    eta_nnw=eta_nnw,
                     sigma=sigma,
                     weights_lr=weights_lr,
                     weights_num_iters=weights_num_iters,
@@ -513,7 +554,8 @@ class JointNodeWeightPrivUpdate(NodeWeightsUpdatePriv):
                 E=E,
                 D=D,
                 d=d,
-                eta=eta,
+                eta_pr=eta_pr,
+                eta_nnp=eta_nnp,
                 sigma=sigma,
                 priv_lr=priv_lr,
                 priv_num_iters=priv_num_iters,

@@ -3,6 +3,7 @@
 import torch
 from torch import nn
 import matplotlib.pyplot as plt
+from loguru import logger
 
 
 def evaluate_tiv(
@@ -114,6 +115,35 @@ def init_random_weights_priv_noise(
     return A, sigma
 
 
+def init_weights_from_priv_noise(
+    P: torch.Tensor,
+    E: torch.Tensor,
+    D: torch.Tensor,
+    R: torch.float,
+    sigma: torch.float,
+):
+    """Initialize random weights that respect the network topology and feasible privacy noise
+    :param P: Matrix of probabilities for intermittent connectivity amongst clients
+    :param E: epsilon values for peer-to-peer privacy
+    :param D: delta values for peer-to-peer privacy
+    :param R: Radius of the Euclidean ball in which the data vectors lie
+    :param sigma: Initial value of privacy noise
+    """
+
+    n = P.shape[0]
+    A = torch.zeros_like(P)
+
+    for i in range(n):
+        for j in range(n):
+            if P[i][j] > 0:
+                ulim = ((E[i][j] * sigma) / (2 * R)) / torch.sqrt(
+                    2 * torch.log(1.25 / D[i][j])
+                )
+                A[i][j] = torch.distributions.Uniform(0, ulim.item()).sample()
+
+    return A
+
+
 class ZeroClipper(object):
     """Clip the weights to zero if they are negative"""
 
@@ -159,6 +189,29 @@ def evaluate_log_barriers(
                 Bt[i][j] = -torch.log(Ct[i][j])
 
     return Bt, Ct
+
+
+def check_privacy_constraints(
+    A: torch.Tensor,
+    sigma: torch.Tensor,
+    E: torch.Tensor,
+    D: torch.Tensor,
+    R: torch.float,
+) -> bool:
+    """Check if a given pair (A, sigma) is feasible for a given set of privacy constraints"""
+
+    n = A.shape[0]
+
+    for i in range(n):
+        for j in range(n):
+            if j != i:
+                priv_level = torch.sqrt(2 * torch.log(1.25 / D[i][j])) * (
+                    2 * A[i][j] * R / sigma
+                )
+                if E[i][j] < priv_level:
+                    return False
+    
+    return True
 
 
 def plot_losses(losses, title, xlabel, ylabel, outfile):
