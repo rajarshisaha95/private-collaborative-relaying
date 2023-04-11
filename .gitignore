@@ -176,7 +176,10 @@ misc/
 
 # Rough notebooks
 scratch.ipynb
-optimization_with_torch.ipynb
+./scripts/ColRel_GaussSeidel_weights.py
+./scripts/ColRel_GD_weights.py
+./scripts/PColRel_barrier.py
+
 
 # Miscellaneous
 ./misc
