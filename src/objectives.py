@@ -1,7 +1,6 @@
 # Objective functions for optimization
 
 import torch
-from loguru import logger
 
 
 def local_tiv(

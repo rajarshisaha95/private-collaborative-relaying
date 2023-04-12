@@ -6,7 +6,7 @@ from torch import nn
 from loguru import logger
 
 from src.objectives import local_tiv, local_tiv_priv, piv_log_barrier
-from src.utils import ZeroClipper, evaluate_tiv, evaluate_piv, check_privacy_constraints
+from src.utils import evaluate_tiv, evaluate_piv, check_privacy_constraints
 
 
 class NodeWeightsUpdate:
@@ -66,11 +66,7 @@ class NodeWeightsUpdate:
             optimizer.zero_grad()
 
             # Projection for non-negative weight constraint
-            clipper = ZeroClipper(proj="node_weights")
-            if i % clipper.frequency == 0:
-                model.apply(clipper)
-
-            losses.append(loss)
+            nn.ReLU(inplace=True)(model.node_weights.data)
 
             if i % 100 == 0:
                 logger.info(f"Iteration: {i}/{num_iters}")
@@ -412,8 +408,10 @@ class JointNodeWeightPrivUpdate(NodeWeightsUpdatePriv):
                 A=model.A, sigma=model.sigma_param, E=model.E, D=model.D, R=model.R
             )
             if feasible == False:
-                logger.info(f"Projecting sigma: {model.sigma_param.data} to sigma_min: {sigma_min}")
-                reg = 1e-6      # Regularization to ensure that log-barrier is not -Inf
+                logger.info(
+                    f"Projecting sigma: {model.sigma_param.data} to sigma_min: {sigma_min}"
+                )
+                reg = 1e-6  # Regularization to ensure that log-barrier is not -Inf
                 model.sigma_param.data = torch.tensor(sigma_min + reg)
 
             losses.append(loss)
