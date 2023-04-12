@@ -174,12 +174,14 @@ misc/
 ./.ipynb_checkpoints
 ./notebooks/.vscode
 
-# Rough notebooks
+# Rough notebooks and scripts
 scratch.ipynb
-./scripts/ColRel_GaussSeidel_weights.py
-./scripts/ColRel_GD_weights.py
-./scripts/PColRel_barrier.py
-
+ColRel_GaussSeidel_weights.py
+ColRel_GD_weights.py
+PColRel_barrier.py
+PColRel_barrier.ipynb
+PColRel_barrier.ipynb
+ColRel_GD_optimization.ipynb
 
 # Miscellaneous
 ./misc
