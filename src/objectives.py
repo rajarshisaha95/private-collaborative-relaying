@@ -1,215 +1,153 @@
-# Objective functions for optimization
+# Objective functions for weight optimization
 
 import torch
 
 
-def local_tiv(
-    p: torch.Tensor,
-    A: torch.Tensor,
-    P: torch.Tensor,
-    R: torch.float,
-    node_idx: int,
-    node_weights: torch.Tensor,
+def evaluate_tiv(
+    p: torch.Tensor = None,
+    A: torch.Tensor = None,
+    P: torch.Tensor = None,
+    radius: float = 1.0,
 ):
-    """Evaluate the contribution of a node's weights to the TIV -- a simplified objective function for Gauss-Seidel iterations
+    """Evaluate the upper bound on topology induced variance
     :param p: Array of transmission probabilities from each of the clients to the PS
-    :param A: Matrix of collaboration weights
+    :param A: Matrix of weights
     :param P: Matrix of probabilities for intermittent connectivity amongst clients
-    :param R: Radius of the Euclidean ball in which the data vectors lie
-    :param node_idx: Node index for which local TIV is being evaluated
-    :param node_weights: (Trainable) weights of node_idx node
+    :param radius: Radius of the Euclidean ball in which the data vectors lie
     """
 
-    assert node_weights.requires_grad == True, "Node weights are not trainable!"
+    num_clients = len(p)
 
-    n = A.shape[0]  # Number of clients
-    i = node_idx  # node-weight represents the weights allocated by node i for its neighbors
+    # Validate inputs
+    assert num_clients == A.shape[0] == A.shape[1], "p and A dimension mismatch!"
+    assert num_clients == P.shape[0] == P.shape[1], "p and P dimension mismatch!"
 
     # First term
-    t1 = 0
-    for j in range(n):
-        t1 += p[j] * P[i][j] * (1 - p[j] * P[i][j]) * node_weights[j] ** 2
-    t1 = t1 * (R**2)
+    S = 0
+
+    # First term
+    for i in range(num_clients):
+        for l in range(num_clients):
+            for j in range(num_clients):
+                S += p[j] * (1 - p[j]) * P[i][j] * P[l][j] * A[i][j] * A[l][j]
 
     # Second term
-    t2 = 0
-    for l in range(n):
-        if l != i:
-            for j in range(n):
-                t2 += p[j] * (1 - p[j]) * P[i][j] * P[l][j] * node_weights[j] * A[l][j]
-    t2 = t2 * 2 * (R**2)
+    for i in range(num_clients):
+        for j in range(num_clients):
+            S += P[i][j] * p[j] * (1 - P[i][j]) * A[i][j] * A[i][j]
 
     # Third term
-    t3 = 0
-    for j in range(n):
-        t3 += p[i] * p[j] * (P[i][j] - P[i][j] * P[j][i]) * (node_weights[j] ** 2)
-    t3 = t3 * (R**2)
+    for i in range(num_clients):
+        for l in range(num_clients):
+            assert P[i][l] == P[l][i], "Matrix P must be symmetric."
+            E = P[i][l]
+            S += p[i] * p[l] * (E - P[i][l] * P[l][i]) * A[l][i] * A[i][l]
 
-    # Compute biases
-    s_i = 0  # Bias of i-th node
-    for j in range(n):
-        s_i += p[j] * P[i][j] * node_weights[j]
+    # Compute the bias terms
+    s = torch.zeros(num_clients)
+    for i in range(num_clients):
+        for j in range(num_clients):
+            s[i] += p[j] * P[i][j] * A[i][j]
 
-    s = torch.zeros(n)  # Bias of all nodes
-    for l in range(n):
-        if l != i:
-            for j in range(n):
-                s[l] += p[j] * P[l][j] * A[l][j]
+    # Contribution of the term due to bias
+    for i in range(num_clients):
+        for j in range(num_clients):
+            S += s[i] * s[j] - 2 * s[i] + 1
 
-    t4 = (s_i - 1) ** 2 + 2 * (s_i - 1) * (torch.sum(s) - n + 1)
-
-    return t1 + t2 + t3 + t4
+    return S * (radius**2) / num_clients**2
 
 
-def local_log_barrier(
-    E: torch.Tensor,
-    D: torch.Tensor,
-    sigma: torch.Tensor,
-    node_idx: int,
-    node_weights: torch.Tensor,
-    R: torch.float,
+def evaluate_piv(
+    p: torch.Tensor = None,
+    P: torch.Tensor = None,
+    sigma: torch.Tensor = None,
+    dimension: int = 128,
 ):
-    """Evaluate the log-barrier penalty for peer-to-peer privacy constraint corresponding to a particular node
-    :param E: epsilon values for peer-to-peer privacy
-    :param D: delta values for peer-to-peer privacy
-    :param sigma: Privacy noise variance
-    :param node_idx: Node index for which local TIV is being evaluated
-    :param node_weights: (Trainable) weights of node_idx node
-    :param R: Radius of the Euclidean ball in which the data vectors lie
+    """Evaluate the upper bound on privacy induced variance
+    :param p: Array of transmission probabilities from each of the clients to the PS
+    :param P: Matrix of probabilities for intermittent connectivity amongst clients
+    :param sigma: Matrix of privacy noise variance between pairs of nodes
+    :param dimension: Dimension of the data vectors
     """
 
-    assert node_weights.requires_grad == True, "Node weights are not trainable!"
+    num_clients = len(p)
 
-    n = E.shape[0]  # Number of clients
-    i = node_idx
+    # Validate inputs
+    assert num_clients == P.shape[0] == P.shape[1], "p and P dimension mismatch!"
+    assert (
+        num_clients == sigma.shape[0] == sigma.shape[1]
+    ), "p and sigma dimension mismatch!"
 
-    t = 0
-    for j in range(n):
-        if j != i:
-            t = t - torch.log(
-                E[i][j] * sigma
-                - torch.sqrt(2 * torch.log(1.25 / D[i][j])) * 2 * node_weights[j] * R
-            )
+    piv = 0
 
-    return t
+    for i in range(num_clients):
+        for j in range(num_clients):
+            piv += p[j] * P[i][j] * sigma[i][j] ** 2
 
-
-def local_nonneg_weights_penalty(node_weights: torch.Tensor):
-    """Evaluate the log-barrier penalty for the non-negative weight constraint"""
-
-    assert node_weights.requires_grad == True, "Node weights are not trainable!"
-
-    n = len(node_weights)  # number of nodes
-
-    t = 0
-    for j in range(n):
-        t = t - torch.log(node_weights[j])
-    return t
+    return piv * dimension / (num_clients**2)
 
 
-def local_tiv_priv(
-    p: torch.Tensor,
-    A: torch.Tensor,
-    P: torch.Tensor,
-    R: torch.float,
-    eta_pr: torch.float,
-    eta_nnw: torch.float,
-    E: torch.Tensor,
-    D: torch.Tensor,
-    sigma: torch.Tensor,
-    node_idx: int,
-    node_weights: torch.Tensor,
+def evaluate_mse(
+    p: torch.Tensor = None,
+    A: torch.Tensor = None,
+    P: torch.Tensor = None,
+    radius: float = 1.0,
+    sigma: torch.Tensor = None,
+    dimension: int = 128,
 ):
-    """Evaluate the contribution of a node's weights to the TIV with the log-barrier penalty
-    :param eta_pr: Regularization strength of log-barrier penalty for privacy constraint
-    :param eta_nnw: Regularization strength of log-barrier penalty for non-negative weights constraint
+    """Evaluate the MSE
+    :param p: Array of transmission probabilities from each of the clients to the PS
+    :param A: Matrix of weights
+    :param P: Matrix of probabilities for intermittent connectivity amongst clients
+    :param radius: Radius of the Euclidean ball in which the data vectors lie
+    :param sigma: Matrix of privacy noise variance between pairs of nodes
+    :param dimension: Dimension of the data vectors
     """
 
-    assert node_weights.requires_grad == True, "Node weights are not trainable!"
-
-    return (
-        local_tiv(p=p, P=P, A=A, R=R, node_idx=node_idx, node_weights=node_weights)
-        + (1 / eta_pr)
-        * local_log_barrier(
-            E=E, D=D, sigma=sigma, node_idx=node_idx, node_weights=node_weights, R=R
-        )
-        + (1 / eta_nnw) * local_nonneg_weights_penalty(node_weights=node_weights)
+    return evaluate_tiv(p=p, A=A, P=P, radius=radius) + evaluate_piv(
+        p=p, P=P, sigma=sigma, dimension=dimension
     )
 
 
-def piv(p: torch.Tensor, P: torch.Tensor, sigma: torch.Tensor, d: int):
-    """
-    Evaluates the privacy induced variance
-        :param d: Dimension of the data vectors
-    """
-
-    assert sigma.requires_grad == True, "Privacy noise is not trainable!"
-
-    n = P.shape[0]  # number of clients
-
-    t = 0
-    for i in range(n):
-        for j in range(n):
-            if j != i:
-                t = t + p[j] * P[i][j]
-
-    return (sigma**2 * d) / (n**2) * t
-
-
-def log_barrier_penalty(
-    A: torch.Tensor,
-    E: torch.Tensor,
-    D: torch.Tensor,
-    sigma: torch.float,
-    R: torch.float,
+def bias_regularizer(
+    p: torch.Tensor = None,
+    A: torch.Tensor = None,
+    P: torch.Tensor = None,
+    reg_type: str = "L2",
+    reg_strength: torch.Tensor = torch.tensor(0),
 ):
-    """
-    Evaluates the cumulative log-barrier penalty across all peer-to-peer privacy constraints
-    """
-
-    assert sigma.requires_grad == True, "Privacy noise is not trainable!"
-
-    n = A.shape[0]
-    B = 0  # cumulative log-barrier penalty
-
-    for i in range(n):
-        for j in range(n):
-            if j != i:
-                B = B - torch.log(
-                    E[i][j] * sigma
-                    - torch.sqrt(2 * torch.log(1.25 / D[i][j])) * 2 * A[i][j] * R
-                )
-
-    return B
-
-
-def nonneg_priv_noise_penalty(sigma: torch.Tensor):
-    """Evaluate the log-barrier penalty for the non-negative privacy noise constraint"""
-
-    assert sigma.requires_grad == True, "Privacy noise is not trainable!"
-
-    return -torch.log(sigma)
-
-
-def piv_log_barrier(
-    p: torch.Tensor,
-    A: torch.Tensor,
-    P: torch.Tensor,
-    R: torch.float,
-    eta_pr: torch.float,
-    eta_nnp: torch.float,
-    E: torch.Tensor,
-    D: torch.Tensor,
-    sigma: torch.Tensor,
-    d: int,
-):
-    """
-    Evaluates the log-barrier penalized privacy induced variance
-    :param eta_nnp: Regularization strength of log-barrier penalty for non-negative privacy noise constraint
+    """Evaluate the regularization term
+    :param p: Array of transmission probabilities from each of the clients to the PS.
+    :param A: Matrix of weights
+    :param P: Matrix of probabilities for intermittent connectivity amongst clients
+    :param reg_type: Type of regularization
+    :param reg_strength: Hyperparameter -- weight of regularization term
     """
 
-    return (
-        piv(p=p, P=P, sigma=sigma, d=d)
-        + (1 / eta_pr) * log_barrier_penalty(A=A, E=E, D=D, sigma=sigma, R=R)
-        + (1 / eta_nnp) * nonneg_priv_noise_penalty(sigma=sigma)
-    )
+    num_clients = len(p)
+    A_dim = A.shape
+    neighbors_dim = P.shape
+
+    # Validate inputs
+    assert num_clients == A_dim[0] == A_dim[1]
+    assert num_clients == neighbors_dim[0] == neighbors_dim[1]
+
+    if reg_type == "L2":
+        # Compute the bias terms
+        bias = torch.zeros(num_clients)
+        for i in range(num_clients):
+            for j in range(num_clients):
+                bias[i] += p[j] * P[i][j] * A[i][j]
+            bias[i] -= 1
+
+        return reg_strength / 2.0 * torch.norm(bias, 2) ** 2
+
+    elif reg_type == "L1":
+        # Compute the bias terms
+        bias = torch.zeros(num_clients)
+        for i in range(num_clients):
+            for j in range(num_clients):
+                bias[i] += p[j] * P[i][j] * A[i][j]
+            bias[i] -= 1
+
+        return reg_strength / 2.0 * torch.norm(bias, 1) ** 2

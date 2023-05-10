@@ -1,555 +1,173 @@
-# Definitions of optimization objects
+# Modules for weight and privacy noise optimization
 
 import torch
 from torch import nn
 
-from loguru import logger
-
-from src.objectives import local_tiv, local_tiv_priv, piv_log_barrier
-from src.utils import evaluate_tiv, evaluate_piv, check_privacy_constraints
+from objectives import evaluate_mse, bias_regularizer
 
 
-class NodeWeightsUpdate:
-    """Updating weights of a node locally"""
+class Model(nn.Module):
+    """Custom Pytorch model for gradient optimization."""
 
-    def __init__(self):
-        pass
-
-    class Model_NodeWeights(nn.Module):
-        """Pytorch model for gradient optimization of node weights"""
-
-        def __init__(
-            self,
-            A: torch.Tensor,
-            node_idx: int,
-            p: torch.Tensor,
-            P: torch.Tensor,
-            R: torch.float,
-        ):
-            super().__init__()
-            self.i = node_idx
-            self.A = A
-            self.p = p
-            self.P = P
-            self.R = R
-
-            # Make a copy of the node_idx row trainable and initialize to previous weights
-            self.node_weights = nn.Parameter(A[self.i, :])
-
-        def forward(self):
-            """Contribution to MSE from the weights of a particular node"""
-
-            forward_loss = local_tiv(
-                p=self.p,
-                A=self.A,
-                P=self.P,
-                R=self.R,
-                node_idx=self.i,
-                node_weights=self.node_weights,
-            )
-
-            return forward_loss
-
-    def training_loop_node_weights(self, model: nn.Module, optimizer, num_iters: int):
-        """Training loop for node weights"""
-
-        losses = []
-
-        assert (
-            hasattr(model, "node_weights") and model.node_weights.requires_grad == True
-        ), "Trainable node weights not found!"
-
-        for i in range(num_iters):
-            loss = model()
-            loss.backward()
-            optimizer.step()
-            optimizer.zero_grad()
-
-            # Projection for non-negative weight constraint
-            nn.ReLU(inplace=True)(model.node_weights.data)
-
-            if i % 100 == 0:
-                logger.info(f"Iteration: {i}/{num_iters}")
-
-        return losses
-
-    def update_node_weights(
+    def __init__(
         self,
-        A: torch.Tensor,
-        node_idx: int,
-        p: torch.Tensor,
-        P: torch.Tensor,
-        R: torch.float,
-        weights_lr=torch.float,
-        weights_num_iters=int,
+        p: torch.Tensor = None,
+        P: torch.Tensor = None,
+        E: torch.Tensor = None,
+        D: torch.Tensor = None,
+        radius: float = 1.0,
+        dimension: int = 128,
+        reg_type: str = "L2",
+        reg_strength: float = 0,
     ):
-        """Update the node_idx row of A (for Gauss-Seidel iterations)
-        :param A: Matrix of probabilities for intermittent connectivity amongst clients
-        :param node_idx: Node index for which weights are updated
-        :param p: Array of transmission probabilities from each of the clients to the PS
-        :param P: Matrix of probabilities for intermittent connectivity amongst clients
-        :param R: Radius of the Euclidean ball in which the data vectors lie
-        :param d: Dimension of the data vectors
-        :param weights_lr: Learning rate for node weights
-        :param weights_num_iters: Number of iterations for learning node weights
-        return: Updated weight matrix with the node_idx row updated
-        """
+        super().__init__()
+        num_clients = len(p)
 
-        logger.info(f"Updating weights of node: {node_idx}")
+        # Validate inputs
+        assert num_clients == P.shape[0] == P.shape[1], "p and P dimension mismatch!"
+        assert num_clients == E.shape[0] == E.shape[1], "p and E dimension mismatch!"
+        assert num_clients == D.shape[0] == D.shape[1], "p and D dimension mismatch!"
 
-        # Create a node weight optimization model
-        m = self.Model_NodeWeights(A=A, node_idx=node_idx, p=p, P=P, R=R)
+        # Initialize weights with random numbers consistent with network topology
+        weights = torch.distributions.Uniform(0, 0.1).sample((num_clients, num_clients))
+        weights = torch.where(P > 0, weights, 0)
 
-        # Instantiate optimizer
-        opt = torch.optim.Adam(m.parameters(), lr=weights_lr)
-
-        # Run the optimization loop
-        _ = self.training_loop_node_weights(
-            model=m, optimizer=opt, num_iters=weights_num_iters
-        )
-
-        # Update the weights of node: node_idx
-        m.node_weights.requires_grad = False
-        A[node_idx, :] = m.node_weights
-
-        del m
-
-        return A
-
-    def gauss_seidel_weight_opt(
-        self,
-        num_iters: int,
-        A_init: torch.Tensor,
-        p: torch.Tensor,
-        P: torch.Tensor,
-        R: torch.float,
-        weights_lr=torch.float,
-        weights_num_iters=int,
-    ):
-        """Iteratively optimize the weights of each node and the noise variance.
-        :param num_iters: Number of passes over the optimization variables
-        :param A_init: Initial weights
-        :param p: Array of transmission probabilities from each of the clients to the PS
-        :param P: Matrix of probabilities for intermittent connectivity amongst clients
-        :param R: Radius of the Euclidean ball in which the data vectors lie
-        :param weights_lr: Learning rate for node weights
-        :param weights_num_iters: Number of iterations for learning node weights
-        returns the optimized weight matrix
-        """
-
-        A = A_init
-        n = A.shape[0]  # Number of clients
-
-        losses = []
-
-        for iters in range(num_iters):
-            logger.info(f"Gauss-Seidel iteration: {iters}/{num_iters}")
-
-            # Optimize over weights of node i keeping weights of other nodes fixed
-            for i in range(n):
-                A = self.update_node_weights(
-                    A=A,
-                    node_idx=i,
-                    p=p,
-                    P=P,
-                    R=R,
-                    weights_lr=weights_lr,
-                    weights_num_iters=weights_num_iters,
+        # Initialize sigma consistent with the privacy constraint
+        noise = torch.zeros_like(weights)
+        for i in range(num_clients):
+            for j in range(num_clients):
+                noise[i][j] = (
+                    2
+                    * weights[i][j]
+                    * radius
+                    / E[i][j]
+                    * torch.sqrt(2 * torch.log(1.25 / D[i][j]))
                 )
 
-            losses.append(evaluate_tiv(p=p, A=A, P=P, R=R))
+        # Make weights and privacy variances torch parameters
+        self.weights = nn.Parameter(weights)
+        self.noise = nn.Parameter(noise)
+        self.p = p
+        self.P = P
+        self.E = E
+        self.D = D
+        self.radius = radius
+        self.dimension = dimension
+        self.reg_type = reg_type
+        self.reg_strength = reg_strength
 
-        return A, losses
-
-
-class NodeWeightsUpdatePriv(NodeWeightsUpdate):
-    """Updating weights of a node locally with privacy constraints"""
-
-    def __init__(self):
-        NodeWeightsUpdate().__init__()
-
-    class Model_NodeWeights(NodeWeightsUpdate.Model_NodeWeights):
-        """Pytorch model for gradient optimization of node weights with log barrier penalty for privacy constraints"""
-
-        def __init__(
-            self,
-            A: torch.Tensor,
-            node_idx: int,
-            p: torch.Tensor,
-            P: torch.Tensor,
-            R: torch.float,
-            E: torch.Tensor,
-            D: torch.Tensor,
-            eta_pr: torch.float,
-            eta_nnw: torch.float,
-            sigma: torch.Tensor,
-        ):
-            super().__init__(A=A, node_idx=node_idx, p=p, P=P, R=R)
-            self.E = E
-            self.D = D
-            self.eta_pr = eta_pr
-            self.eta_nnw = eta_nnw
-            self.sigma = sigma
-
-        def forward(self):
-            """Contribution to MSE from the weights of particular node (TIV + Privacy penalty)"""
-
-            forward_loss = local_tiv_priv(
-                p=self.p,
-                A=self.A,
-                P=self.P,
-                R=self.R,
-                eta_pr=self.eta_pr,
-                eta_nnw=self.eta_nnw,
-                E=self.E,
-                D=self.D,
-                sigma=self.sigma,
-                node_idx=self.i,
-                node_weights=self.node_weights,
-            )
-
-            return forward_loss
-
-    def update_node_weights(
-        self,
-        A: torch.Tensor,
-        node_idx: int,
-        p: torch.Tensor,
-        P: torch.Tensor,
-        R: torch.float,
-        E: torch.Tensor,
-        D: torch.Tensor,
-        eta_pr: torch.float,
-        eta_nnw: torch.float,
-        sigma: torch.float,
-        weights_lr=torch.float,
-        weights_num_iters=int,
-    ):
-        """Update the node_idx row of A (for Gauss-Seidel iterations)
-        :param A: Matrix of probabilities for intermittent connectivity amongst clients
-        :param node_idx: Node index for which weights are updated
-        :param p: Array of transmission probabilities from each of the clients to the PS
-        :param P: Matrix of probabilities for intermittent connectivity amongst clients
-        :param R: Radius of the Euclidean ball in which the data vectors lie
-        :param E: epsilon values for peer-to-peer privacy
-        :param D: delta values for peer-to-peer privacy
-        :param eta_pr: Regularization strength of log barrier penalty for privacy constraints
-        :param eta_nnw: Regularization strength of log barrier penalty for non-negative weight constraints
-        :param sigma: Privacy noise variance
-        :param weights_lr: Learning rate for node weights
-        :param weights_num_iters: Number of iterations for learning node weights
-        return: Updated weight matrix with the node_idx row updated
-        """
-
-        logger.info(f"Updating weights of node: {node_idx}")
-
-        # Create a node weight optimization model
-        m = self.Model_NodeWeights(
-            A=A,
-            node_idx=node_idx,
-            p=p,
-            P=P,
-            R=R,
-            E=E,
-            D=D,
-            eta_pr=eta_pr,
-            eta_nnw=eta_nnw,
-            sigma=sigma,
-        )
-
-        # Instantiate optimizer
-        opt = torch.optim.Adam(m.parameters(), lr=weights_lr)
-
-        # Run the optimization loop
-        _ = self.training_loop_node_weights(
-            model=m, optimizer=opt, num_iters=weights_num_iters
-        )
-
-        # Update the weights of node: node_idx
-        m.node_weights.requires_grad = False
-        A[node_idx, :] = m.node_weights
-
-        del m
-
-        return A
-
-    def gauss_seidel_weight_opt(
-        self,
-        num_iters: int,
-        A_init: torch.Tensor,
-        p: torch.Tensor,
-        P: torch.Tensor,
-        R: torch.float,
-        E: torch.Tensor,
-        D: torch.Tensor,
-        eta_pr: torch.float,
-        eta_nnw: torch.float,
-        sigma: torch.float,
-        weights_lr=torch.float,
-        weights_num_iters=int,
-    ):
-        """Iteratively optimize the weights of each node and the noise variance.
-            :param num_iters: Number of passes over the optimization variables
-            :param A_init: Initial weights
-            :param p: Array of transmission probabilities from each of the clients to the PS
-            :param P: Matrix of probabilities for intermittent connectivity amongst clients
-            :param R: Radius of the Euclidean ball in which the data vectors lie
-            :param E: epsilon values for peer-to-peer privacy
-            :param D: delta values for peer-to-peer privacy
-            :param eta_pr: Regularization strength of log barrier penalty for privacy constraints
-            :param eta_nnw: Regularization strength of log barrier penalty for non-negative weight constraints
-            :param sigma: Privacy noise variance
-            :param weights_lr: Learning rate for node weights
-            :param weights_num_iters: Number of iterations for learning node weights
-        returns the optimized weight matrix
-        """
-
-        A = A_init
-        n = A.shape[0]  # Number of clients
-
-        losses = []
-
-        for iters in range(num_iters):
-            logger.info(f"Gauss-Seidel iteration: {iters}/{num_iters}")
-
-            # Optimize over weights of node i keeping weights of other nodes fixed
-            for i in range(n):
-                A = self.update_node_weights(
-                    A=A,
-                    node_idx=i,
-                    p=p,
-                    P=P,
-                    R=R,
-                    E=E,
-                    D=D,
-                    eta_pr=eta_pr,
-                    eta_nnw=eta_nnw,
-                    sigma=sigma,
-                    weights_lr=weights_lr,
-                    weights_num_iters=weights_num_iters,
+        # Compute slopes / privacy coefficients
+        B = torch.zeros_like(E)
+        for i in range(num_clients):
+            for j in range(num_clients):
+                B[i][j] = (
+                    2 * radius / E[i][j] * torch.sqrt(2 * torch.log(1.25 / D[i][j]))
                 )
 
-            losses.append(evaluate_tiv(p=p, A=A, P=P, R=R))
+        self.B = B
 
-        return A, losses
+    def forward(self):
+        """Implement the topology induced variance to be optimized"""
 
+        p = self.p
+        P = self.P
+        A = self.weights
+        sigma = self.noise
+        radius = self.radius
+        dimension = self.dimension
+        reg_type = self.reg_type
+        reg_strength = self.reg_strength
 
-class JointNodeWeightPrivUpdate(NodeWeightsUpdatePriv):
-    """Jointly optimizing the node weights and privacy noise for minimizing MSE under privacy constraints"""
-
-    def __init__(self):
-        NodeWeightsUpdatePriv().__init__()
-
-    class Model_PrivNoise(nn.Module):
-        """Pytorch model for gradient optimization of privacy noise variance"""
-
-        def __init__(
-            self,
-            A: torch.Tensor,
-            p: torch.Tensor,
-            P: torch.Tensor,
-            E: torch.Tensor,
-            D: torch.Tensor,
-            R: torch.float,
-            d: int,
-            eta_pr: torch.float,
-            eta_nnp: torch.float,
-            sigma: torch.Tensor,
-        ):
-            super().__init__()
-            self.A = A
-            self.p = p
-            self.P = P
-            self.E = E
-            self.D = D
-            self.R = R
-            self.d = d
-            self.eta_pr = eta_pr
-            self.eta_nnp = eta_nnp
-
-            # Make a copy of the privacy noise variance trainable
-            self.sigma_param = nn.Parameter(sigma)
-
-        def forward(self):
-            """Contribution to MSE from the PIV and the log-barrier penalty"""
-
-            forward_loss = piv_log_barrier(
-                p=self.p,
-                A=self.A,
-                P=self.P,
-                R=self.R,
-                eta_pr=self.eta_pr,
-                eta_nnp=self.eta_nnp,
-                E=self.E,
-                D=self.D,
-                sigma=self.sigma_param,
-                d=self.d,
-            )
-
-            return forward_loss
-
-    def training_loop_privacy_noise(self, model: nn.Module, optimizer, num_iters: int):
-        """Training loop for privacy noise variance"""
-
-        losses = []
-
-        assert (
-            hasattr(model, "sigma_param") and model.sigma_param.requires_grad == True
-        ), "Trainable privacy noise variance not found!"
-
-        for i in range(num_iters):
-            loss = model()
-            loss.backward()
-            optimizer.step()
-            optimizer.zero_grad()
-
-            # Projection for respecting privacy constraints
-            feasible, sigma_min = check_privacy_constraints(
-                A=model.A, sigma=model.sigma_param, E=model.E, D=model.D, R=model.R
-            )
-            if feasible == False:
-                logger.info(
-                    f"Projecting sigma: {model.sigma_param.data} to sigma_min: {sigma_min}"
-                )
-                reg = 1e-6  # Regularization to ensure that log-barrier is not -Inf
-                model.sigma_param.data = torch.tensor(sigma_min + reg)
-
-            losses.append(loss)
-
-            if i % 100 == 0:
-                logger.info(f"Iteration: {i}/{num_iters}")
-                logger.info(f"Privacy noise: {model.sigma_param.data}")
-
-        return losses
-
-    def update_priv_noise(
-        self,
-        A: torch.Tensor,
-        p: torch.Tensor,
-        P: torch.Tensor,
-        R: torch.float,
-        E: torch.Tensor,
-        D: torch.Tensor,
-        d: int,
-        eta_pr: torch.float,
-        eta_nnp: torch.float,
-        sigma: torch.float,
-        priv_lr=torch.float,
-        priv_num_iters=int,
-    ):
-        """Update the privacy noise variance (for Gauss-Seidel iterations)
-        :param d: Dimension of the data vectors
-        :param priv_lr: Learning rate for privacy noise variance
-        :param priv_num_iters: Number of iterations for learning privacy noise variance
-        """
-
-        logger.info("Updating privacy noise variance")
-
-        # Create a privacy noise optimization model
-        m = self.Model_PrivNoise(
-            A=A,
-            p=p,
-            P=P,
-            E=E,
-            D=D,
-            R=R,
-            d=d,
-            eta_pr=eta_pr,
-            eta_nnp=eta_nnp,
-            sigma=sigma,
+        forward_loss = evaluate_mse(
+            p=p, A=A, P=P, radius=radius, sigma=sigma, dimension=dimension
         )
+        +bias_regularizer(p=p, A=A, P=P, reg_type=reg_type, reg_strength=reg_strength)
 
-        # Instantiate optimizer
-        opt = torch.optim.Adam(m.parameters(), lr=priv_lr)
+        return forward_loss
 
-        # Run the optimization loop
-        _ = self.training_loop_privacy_noise(
-            model=m, optimizer=opt, num_iters=priv_num_iters
-        )
 
-        # Update the value of privacy noise variance
-        m.sigma_param.requires_grad = False
-        sigma = m.sigma_param
+class ConeProjector(object):
+    """Project the weights and the noise to a cone to protetc privacy and non-negativity constraints"""
 
-        logger.info(f"Privacy noise: {m.sigma_param.data}")
+    def __init__(self, frequency=1):
+        self.frequency = frequency
 
-        del m
+    def __call__(self, module):
+        A = module.weights.data
+        sigma = module.noise.data
+        num_clients = A.shape[0]
+        B = module.B
 
-        return sigma
+        for i in range(num_clients):
+            for j in range(num_clients):
+                if sigma[i][j] >= 0 and A[i][j] < 0:
+                    A[i][j] = 0
 
-    def gauss_seidel_weight_opt(
-        self,
-        num_iters: int,
-        A_init: torch.Tensor,
-        p: torch.Tensor,
-        P: torch.Tensor,
-        R: torch.float,
-        E: torch.Tensor,
-        D: torch.Tensor,
-        d: int,
-        eta_pr: torch.float,
-        eta_nnw: torch.float,
-        eta_nnp: torch.float,
-        sigma_init: torch.float,
-        weights_lr=torch.float,
-        weights_num_iters=int,
-        priv_lr=torch.float,
-        priv_num_iters=int,
-    ):
-        """Jointly optimize the collaboration weights and privacy noise variance
-        :param d: Dimension of the data vectors
-        :param eta_pr: Regularization strength of log barrier penalty for privacy constraints
-        :param eta_nnw: Regularization strength of log barrier penalty for non-negative weight constraints
-        :param eta_nnp: Regularization strength of log barrier penalty for non-negative privacy noise constraint
-        :param sigma_init: Initial (feasible) privacy noise variance
-        :param priv_lr: Learning rate for privacy noise variance
-        :param priv_num_iters: Number of iterations for learning privacy noise variance
-        """
+                elif sigma[i][j] < 0 or (
+                    sigma[i][j] >= 0 and sigma[i][j] < B[i][j] * A[i][j]
+                ):
+                    A[i][j] = max(A[i][j] + B[i][j] * sigma[i][j], 0) / (
+                        1 + B[i][j] ** 2
+                    )
+                    sigma[i][j] = B[i][j] * A[i][j]
 
-        A = A_init
-        n = A.shape[0]
-        sigma = sigma_init
 
-        tiv_losses = []
-        piv_losses = []
+def training_loop(model: nn.Module, optimizer, n: int = 1500):
+    "Training loop for torch model."
+    losses = []
 
-        for iters in range(num_iters):
-            logger.info(f"Gauss-Seidel iteration: {iters}/{num_iters}")
+    for i in range(n):
+        loss = model()
+        loss.backward()
+        optimizer.step()
+        optimizer.zero_grad()
 
-            # Optimize over weights of node i keeping weights of other nodes and privacy noise variance fixed
-            for i in range(n):
-                A = self.update_node_weights(
-                    A=A,
-                    node_idx=i,
-                    p=p,
-                    P=P,
-                    R=R,
-                    E=E,
-                    D=D,
-                    eta_pr=eta_pr,
-                    eta_nnw=eta_nnw,
-                    sigma=sigma,
-                    weights_lr=weights_lr,
-                    weights_num_iters=weights_num_iters,
-                )
+        cone_projector = ConeProjector()
+        if i % cone_projector.frequency == 0:
+            model.apply(cone_projector)
 
-            # Optimize over privacy noise variance keeping collaboration weights fixed
-            sigma = self.update_priv_noise(
-                A=A,
-                p=p,
-                P=P,
-                R=R,
-                E=E,
-                D=D,
-                d=d,
-                eta_pr=eta_pr,
-                eta_nnp=eta_nnp,
-                sigma=sigma,
-                priv_lr=priv_lr,
-                priv_num_iters=priv_num_iters,
-            )
+        losses.append(loss)
 
-            tiv_losses.append(evaluate_tiv(p=p, A=A, P=P, R=R))
-            piv_losses.append(evaluate_piv(p=p, P=P, sigma=sigma, d=d))
+        if i % 100 == 0:
+            print(f"Iteration: {i}/{n}")
 
-        return A, sigma, tiv_losses, piv_losses
+    return losses
+
+
+def optimize_weights_and_privacy_noise(
+    p: torch.Tensor = None,
+    P: torch.Tensor = None,
+    E: torch.Tensor = None,
+    D: torch.Tensor = None,
+    radius: float = 1,
+    dimension: int = 1,
+    reg_type: str = "L2",
+    reg_strength: float = 0,
+):
+    """
+    Optimize the collaboration weights and privacy noise using projected gradient descent based algorithm
+    :param p: Connectivity of clients to the PS
+    :param P: Connectivity of clients with each other
+    :param E: Peer-to-Peer privacy level parameter epsilon of clients
+    :param D: Peer-to-Peer privacy level parameter delta of clients
+    :param radius: Radius of the Euclidean ball in which the data vectors lie
+    :param dimension: Dimension of datapoints whose mean is being computed
+    :param reg_type: Regularization type for accumulated bias
+    :param reg_strength: Regularization strength for accumualted bias
+    Return: Optimized peer-to-peer collaboration weights and privacy noise variance and loss
+    """
+
+    m = Model(
+        p=p,
+        P=P,
+        E=E,
+        D=D,
+        radius=radius,
+        dimension=dimension,
+        reg_type=reg_type,
+        reg_strength=reg_strength,
+    )
+    opt = torch.optim.Adam(m.parameters(), lr=0.005)
+    losses = training_loop(m, opt)
+
+    return m.weights.detach().numpy(), m.noise.detach().numpy(), losses
