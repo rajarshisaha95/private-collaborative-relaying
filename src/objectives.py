@@ -49,11 +49,9 @@ def evaluate_tiv(
         for j in range(num_clients):
             s[i] += p[j] * P[i][j] * A[i][j]
 
-    # Contribution of the term due to bias
-    for i in range(num_clients):
-        for j in range(num_clients):
-            S += s[i] * s[j] - 2 * s[i] + 1
-
+    # Add the bias term
+    S += (torch.sum(s) - num_clients) ** 2
+        
     return S * (radius**2) / num_clients**2
 
 
@@ -82,7 +80,7 @@ def evaluate_piv(
 
     for i in range(num_clients):
         for j in range(num_clients):
-            piv += p[j] * P[i][j] * sigma[i][j] ** 2
+            piv += p[j] * P[i][j] * (sigma[i][j] ** 2)
 
     return piv * dimension / (num_clients**2)
 
@@ -132,22 +130,15 @@ def bias_regularizer(
     assert num_clients == A_dim[0] == A_dim[1]
     assert num_clients == neighbors_dim[0] == neighbors_dim[1]
 
-    if reg_type == "L2":
-        # Compute the bias terms
-        bias = torch.zeros(num_clients)
-        for i in range(num_clients):
-            for j in range(num_clients):
-                bias[i] += p[j] * P[i][j] * A[i][j]
-            bias[i] -= 1
+    # Compute the bias terms
+    bias = torch.zeros(num_clients)
+    for i in range(num_clients):
+        for j in range(num_clients):
+            bias[i] += p[j] * P[i][j] * A[i][j]
+        bias[i] -= 1
 
+    if reg_type == "L2":
         return reg_strength / 2.0 * torch.norm(bias, 2) ** 2
 
     elif reg_type == "L1":
-        # Compute the bias terms
-        bias = torch.zeros(num_clients)
-        for i in range(num_clients):
-            for j in range(num_clients):
-                bias[i] += p[j] * P[i][j] * A[i][j]
-            bias[i] -= 1
-
-        return reg_strength / 2.0 * torch.norm(bias, 1) ** 2
+        return reg_strength * torch.norm(bias, 1)
