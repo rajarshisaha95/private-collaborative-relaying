@@ -510,7 +510,7 @@ def simple_network_test_private_joint_opt_init_weights_from_noise():
 
 if __name__ == "__main__":
     # Weight optimization without any privacy constraints
-    # fire.Fire(simple_network_test)
+    fire.Fire(simple_network_test)
 
     # Weight optimization with a fixed privacy-noise variance (Initial weights: random)
     # Initial random weights and sigma is pre-determined respecting all peer-to-peer privacy constraints
@@ -521,7 +521,7 @@ if __name__ == "__main__":
     # fire.Fire(simple_network_test_private_init_weights_from_noise)
 
     # Joint optimization of weights and privacy-noise variance (Initial weights: random)
-    fire.Fire(simple_network_test_private_joint_opt_init_weights_random)
+    # fire.Fire(simple_network_test_private_joint_opt_init_weights_random)
 
     # Joint optimization of weights and privacy-noise variance
     # (Initial sigma: fixed. Initial weights: random respecting privacy constraints w.r.t. sigma)
