@@ -67,7 +67,7 @@ class Model(nn.Module):
         self.B = B
 
     def forward(self):
-        """Implement the topology induced variance to be optimized"""
+        """Implement the topology and privacy induced variance to be optimized"""
 
         p = self.p
         P = self.P
@@ -80,14 +80,15 @@ class Model(nn.Module):
 
         forward_loss = evaluate_mse(
             p=p, A=A, P=P, radius=radius, sigma=sigma, dimension=dimension
+        ) + bias_regularizer(
+            p=p, A=A, P=P, reg_type=reg_type, reg_strength=reg_strength
         )
-        +bias_regularizer(p=p, A=A, P=P, reg_type=reg_type, reg_strength=reg_strength)
 
         return forward_loss
 
 
 class ConeProjector(object):
-    """Project the weights and the noise to a cone to protetc privacy and non-negativity constraints"""
+    """Project the weights and the noise to a cone to respect privacy and non-negativity constraints"""
 
     def __init__(self, frequency=1):
         self.frequency = frequency
@@ -113,7 +114,7 @@ class ConeProjector(object):
 
 
 def training_loop(model: nn.Module, optimizer, n: int = 1500):
-    "Training loop for torch model."
+    "Training loop for torch model"
     losses = []
 
     for i in range(n):
@@ -143,6 +144,8 @@ def optimize_weights_and_privacy_noise(
     dimension: int = 1,
     reg_type: str = "L2",
     reg_strength: float = 0,
+    num_iters=1500,
+    learning_rate=0.005,
 ):
     """
     Optimize the collaboration weights and privacy noise using projected gradient descent based algorithm
@@ -154,6 +157,8 @@ def optimize_weights_and_privacy_noise(
     :param dimension: Dimension of datapoints whose mean is being computed
     :param reg_type: Regularization type for accumulated bias
     :param reg_strength: Regularization strength for accumualted bias
+    :param num_iters: Number of iterations of gradient descent
+    :param learning_rate: Learning rate of optimizer
     Return: Optimized peer-to-peer collaboration weights and privacy noise variance and loss
     """
 
@@ -167,7 +172,7 @@ def optimize_weights_and_privacy_noise(
         reg_type=reg_type,
         reg_strength=reg_strength,
     )
-    opt = torch.optim.Adam(m.parameters(), lr=0.005)
-    losses = training_loop(m, opt)
+    opt = torch.optim.Adam(m.parameters(), lr=learning_rate)
+    losses = training_loop(m, opt, n=num_iters)
 
     return m.weights.detach().numpy(), m.noise.detach().numpy(), losses
