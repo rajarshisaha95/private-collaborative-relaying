@@ -6,33 +6,29 @@ We consider the problem of privately estimating the mean of vectors distributed 
 
 ## Problem Formulation and Algorithm
 
-Connectivity is modeled using Bernoulli random variables.
+1. Connectivity is modeled using Bernoulli random variables.
 
-- $\tau_{ij} \sim \mathrm{Ber}(p_{ij})$ denotes intermittent connectivity when transmitting from node $j$ to node $i$ during collaboration.
+2. Peer-to-Peer privacy constraints: Communication fom node $i$ to node $j$ should satisfy local differential privacy.
 
-- $\tau_i \sim \mathrm{Ber}(p_{i})$ denotes the intermittent connectivity when transmitting from node $i$ to the parameter server.
-
-- Peer-to-Peer privacy constraints: Communication fom node $i$ to node $j$ should satisfy $(\underline{\epsilon}_{ij}, \underline{\delta}_{ij})$ local differential privacy.
-
-- The communication channel (or, connectivity probabilities), i.e., $\{p_{ij}\}_{i \in [n], j \in [n]}$ and $\{p_i\}_{i \in [n]}$ are assumed to be known beforehand for stage $0$.
+3. The communication channel, i.e., connectivity probabilities between nodes and between a node and the paramter server, are assumed to be known beforehand for stage $0$.
 
 ### __PriCER__ Stage 0: (Pre-Processing) Joint weight and noise variance optimization
 
-__Input__: $p_{ij}$, $p_i$, $\underline{\epsilon}_{ij}$, $\underline{\delta}_{ij}$ for all $i \in [n]$, $j \in [n]$, maximal iterations: $T$
+__Input__: Connectivity probabilities and privacy constraints, Maximal iterations: $T$
 
-__Output__: Optimized collaboration weight matrix, $\mathbf{A}^{(T)} \equiv \{\alpha_{ij}\}_{i \in [n], j \in [n]}$, and privacy noise variance matrix, $\boldsymbol{\Sigma}^{(T)} \equiv \{\sigma_{ij}\}_{i,j \in [n]}$
+__Output__: Optimized collaboration weight matrix and privacy noise variance matrix
 
-__Initialize__: Feasible $\mathbf{A}^{(0)}$ and $\boldsymbol{\Sigma}^{(0)}$
+__Initialize__: Uniform initialization of weights and variances.
 
 __For__ $t = 1$ to $T$:
 
-- Take gradient descent steps on $\alpha_{ij}$ and $\sigma_{ij}$
-- Project $\alpha_{ij}$ and $\sigma_{ij}$ on to privacy cone constraints.
+- Take gradient descent steps
+- Project onto cone constraints.
 
 
 ### __PriCER__ Stage 1: Local aggregation
 
-__Input__: Collaboration weights $\mathbf{A} \equiv \{\alpha_{ij}\}_{i \in [n], j \in [n]}$, and privacy noise variances $\boldsymbol{\Sigma} \equiv\{\sigma_{ij}\}_{i,j \in [n]}$
+__Input__: Collaboration weights and privacy noise variances
 
 __Output__: $\widetilde{\mathbf{x}}_i$ for all $i \in [n]$
 
