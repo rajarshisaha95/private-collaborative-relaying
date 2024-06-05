@@ -30,29 +30,29 @@ __For__ $t = 1$ to $T$:
 
 __Input__: Collaboration weights and privacy noise variances
 
-__Output__: $\widetilde{\mathbf{x}}_i$ for all $i \in [n]$
+__Output__: Locally aggregated mean at every node
 
 __For__ $i = 1$ to $n$:
 
-- Locally generate $\mathbf{x}_i$
-- Transmit $\widetilde{\mathbf{x}}_{ij} = \alpha_{ij}\mathbf{x}_i + \mathbf{n}_{ij}$ to nodes $j \neq i$
-- Receive $\widetilde{\mathbf{x}}_{ji} = \tau_{ji}(\alpha_{ji}\mathbf{x}_j + \mathbf{n}_{ji})$ from $j \neq i$, where $\mathbf{n}_{ji} \sim \mathcal{N}(\mathbf{0}, \sigma_{ji}^2\mathbf{I})$
-- Set $\widetilde{\mathbf{x}}_{ii} = \alpha_{ii}\mathbf{x}_i + \mathbf{n}_{ii}$
-- Locally aggregate: $\widetilde{\mathbf{x}}_i=\sum_{j\in[n]}\widetilde{\mathbf{x}}_{ji}$
-- Transmit $\widetilde{\mathbf{x}}_i$ to the parameter server
+- Locally generate data
+- Transmit scaled and Gaussian perturbed signal to neighbors
+- Receive signals from transmitting neighbors if channel is instantaneously present. Null signal otherwise.
+- Aggregate local contribution
+- Locally aggregate all received signals
+- Transmit locally aggregated signal to the parameter server over an intermittent link
 
 
 ### __PriCER__ Stage 2: Global aggregation
 
-__Input__: $\tau_i\widetilde{\mathbf{x}}_i$ for all $i \in[n]$
+__Input__: Received signals from each node. Null signal if channel is instaneously absent.
 
-__Output__: Estimate of the mean at the PS: $\widehat{\overline{\mathbf{x}}}$
+__Output__: Estimate of the mean at the server
 
 __For__ $i = 1$ to $n$:
 
-- Receive $\tau_i\widetilde{\mathbf{x}}_i$
+- Receive signals from successfully transmitting nodes
 
-Aggregate the receive signals: $\widehat{\overline{\mathbf{x}}} = \frac{1}{n}\sum_{i \in [n]}\tau_i\widetilde{\mathbf{x}}_i$
+Globally aggregate the received signals
 
 
 
