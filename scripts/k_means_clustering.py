@@ -1,60 +1,36 @@
 import numpy as np
 import torch
-import torchvision
 import torchvision.datasets as datasets
 
-from multiprocessing.dummy import Pool
-
 from loguru import logger
-import matplotlib.pyplot as plt
-import argparse
 
 from mean_estimation import (
-    intermittent_sole_good_client_naive,
-    intermittent_sole_good_client_pricer_full_colab,
+    dme_intermittent_naive,
+    dme_pricer
 )
 
-
-def load_mnist_data(dataset_path="../datasets/mnist"):
-    """Load the MNIST dataset
-    :param dataset_path: Location to download the dataset
-    Return: Downloaded dataset as a numpy array
-    """
-
-    mnist_train = datasets.MNIST(root=dataset_path, train=True, download=True)
-    X = mnist_train.data.numpy().reshape(-1, 28 * 28)
-
-    return X
+from optimization import optimize_weights_and_privacy_noise
+from objectives import evaluate_mse, evaluate_tiv, evaluate_piv
+from utils import evaluate_bias_at_clients, load_mnist_data, load_cifar10_data, load_fashion_mnist_embs
 
 
-def load_cifar10_data(dataset_path="../datasets/cifar10"):
-    """Load the CIFAR-10 dataset
-    :param dataset_path: Location to download the dataset
-    :return: Downloaded dataset as a tensor
-    """
-    transform = torchvision.transforms.ToTensor()
-    cifar10_train = datasets.CIFAR10(root=dataset_path, train=True, download=True, transform=transform)
-    train_data = torch.cat([sample[0].flatten().unsqueeze(0) for sample in cifar10_train], dim=0)
-
-    return train_data.numpy()
-
-
-def split_dataset(X, n_machines, partition: str = "uniform"):
+def split_dataset(X, n_machines, partition: str = "uniform", manual_seed=42):
     """Split the dataset into n_machines subsets
     :param X: Complete dataset
     :param n_machines: No. of machine across which X is to be distributed
     :param partition: Dataset split type
+    :param manual_seed: Random seed to do a different dataset splitting
     Return: List of (array like) datasets
     """
+
+    # Manually initialize seed
+    np.random.seed(manual_seed)
 
     if partition == "uniform":
         np.random.shuffle(X)  # Shuffle the rows of X randomly
 
-    else:
-        pass
-
     if n_machines > 1:
-        logger.info(f"Splitting the dataset according to partition type: {partition}")
+        print(f"Splitting the dataset according to partition type: {partition}")
 
     # Sort and part (by default)
     n_samples = len(X)
@@ -69,24 +45,36 @@ def split_dataset(X, n_machines, partition: str = "uniform"):
     return subsets
 
 
-def kmeans_plus_plus(X, k, seed=42):
+def kmeans_plus_plus(X, k, manual_seed=42, metric="euclidean"):
     """Initialize the centroids using k-means++ algorithm.
     :param X: Data matrix of shape (num_samples, num_features)
     :param k: Number of clusters in k-means clustering
-    :param seed: Random seed to do a different initial clustering
-    Return centroids of the k clusters
+    :param manual_seed: Random seed to do a different initial clustering
+    :param metric: Distance metric used for clustering
+    Return initial centroids of the k clusters
     """
+
+    # Manually initialize seed
+    np.random.seed(manual_seed)
 
     # Initialize the first centroid uniformly at random
     centroids = [X[np.random.choice(len(X))]]
+    sigma = 1.0             # Width of the Gaussian kernel
 
     # Choose the remaining centroids using the K-means++ initialization algorithm
     for i in range(1, k):
-        # Compute distance of each point from the centroids
+        # Compute distance of each point from the existing centroids
         distances = np.zeros((len(X), len(centroids)))
-        for i in range(len(X)):
-            for j in range(len(centroids)):
-                distances[i][j] = np.linalg.norm(X[i] - centroids[j])
+
+        if metric == "euclidean":
+            for i in range(len(X)):
+                for j in range(len(centroids)):
+                    distances[i][j] = np.linalg.norm(X[i] - centroids[j])
+
+        elif metric == "gaussian-kernel":
+            for i in range(len(X)):
+                for j in range(len(centroids)):
+                    distances[i][j] = np.exp(-np.linalg.norm(X[i] - centroids[j]) ** 2 / (2 * sigma ** 2))
 
         # Compute the minimum distance of each datapoint and all the previously chosen centroids
         min_distances = np.min(distances, axis=1)
@@ -104,33 +92,43 @@ def kmeans_plus_plus(X, k, seed=42):
     return np.array(centroids)
 
 
-def run_local_kmeans(data, centroids, k, max_iterations):
+def run_local_kmeans(data, centroids, k, max_iterations, metric):
     """Run k-means locally on each machine
     :param data: Local data of the machine
     :param centroids: Initial centroids broadcasted from the parameter server
     :param k: Number of clusters
     :param max_iterations: Number of local k-means iteration
+    :param metric: Distance metric used for clustering
     Return: List of updated centroids
     """
 
     num_datapoints = data.shape[0]
+    updated_centroids = np.zeros([k, data.shape[1],])
+    sigma = 1.0                     # Width of the Gaussian kernel
 
     distances = np.zeros([num_datapoints, k])
 
     for i in range(max_iterations):
-        logger.info(f"Local k-means iteration: {i}/{max_iterations}")
+        # print(f"Local k-means iteration: {i}/{max_iterations}")
 
         # Compute the distance of each datapoint to each of the centroids
-        for j in range(num_datapoints):
-            for l in range(k):
-                distances[j][l] = np.linalg.norm(data[j, :] - centroids[l, :])
+        if metric == "euclidean":
+            for j in range(num_datapoints):
+                for l in range(k):
+                    distances[j][l] = np.linalg.norm(data[j, :] - centroids[l, :])
+
+        elif metric == "gaussian-kernel":
+            for j in range(num_datapoints):
+                for l in range(k):
+                    distances[j][l] = np.exp(-np.linalg.norm(data[j, :] - centroids[l, :]) ** 2 / (2 * sigma ** 2))
 
         labels = np.argmin(distances, axis=1)
 
         for l in range(k):
-            centroids[l, :] = np.mean(data[labels == l], axis=0)
+            if np.sum(labels == l) > 0:
+                updated_centroids[l, :] = np.mean(data[labels == l], axis=0)
 
-    return centroids
+    return updated_centroids
 
 
 def calculate_inertia(data, centroids):
@@ -156,101 +154,223 @@ def calculate_inertia(data, centroids):
     return inertia
 
 
+def assign_to_nearest_centroid(data, centroids, metric="euclidean"):
+
+    assert data.shape[1] == centroids.shape[1], "Dimension mismatch between data and centroids!"
+    num_datapoints = data.shape[0]
+    k = centroids.shape[0]
+    distances = np.zeros([num_datapoints, k])
+    sigma = 1.0             # Width of a Gaussian kernel
+
+    # Calculate distances between each datapoint and each centroid depnding on the type of metric
+    if metric == "euclidean":
+        for j in range(num_datapoints):
+            for l in range(k):
+                distances[j][l] = np.linalg.norm(data[j, :] - centroids[l, :])
+
+    elif metric == "gaussian-kernel":
+        for j in range(num_datapoints):
+            for l in range(k):
+                distances[j][l] = np.exp(-np.linalg.norm(data[j, :] - centroids[l, :]) ** 2 / (2 * sigma ** 2))
+
+    # Find the index of the nearest centroid for each datapoint
+    assigned_centroids = np.argmin(distances, axis=1)
+
+    return assigned_centroids
+
+
+def assign_labels_to_centroids(train_data, train_labels, centroids):
+    """Assign labels to centroids based on majority vote of all training datapoints assigned to that centroid
+    """
+
+    assert train_data.shape[0] == len(train_labels), "Dimension mismatch between data and labels!"
+
+    # Find the index of the nearest centroid for each datapoint
+    assigned_centroids = assign_to_nearest_centroid(train_data, centroids)
+
+    # Initialize an array to store the labels assigned to each centroid
+    assigned_labels = np.zeros(centroids.shape[0])
+
+    # Assign labels to centroids based on the majority of labels of assigned datapoints
+    for i in range(centroids.shape[0]):
+        datapoints_indices_for_centroid = np.where(assigned_centroids == i)[0]
+        labels_for_centroid = train_labels[datapoints_indices_for_centroid]
+        majority_label = np.argmax(np.bincount(labels_for_centroid))
+        assigned_labels[i] = majority_label
+
+    return assigned_labels
+
+
+def classify_test_data(test_data, test_labels, centroids, centroid_labels):
+    """Assign labels to test datapoints based on closest centroid
+    """
+
+    # Find the index of the nearest centroid for each test datapoint
+    predicted_centroids = assign_to_nearest_centroid(test_data, centroids)
+
+    # Assign the labels of the nearest centroids as the predicted labels for test datapoints
+    predicted_labels = centroid_labels[predicted_centroids]
+
+    # Compare predicted labels with ground truth labels
+    correct_predictions = np.sum(predicted_labels == test_labels)
+
+    # Calculate accuracy as the ratio of correct predictions to the total number of datapoints
+    accuracy = correct_predictions / len(test_labels)
+
+    return accuracy
+
+
+def relative_clustering_mismatch(data, centroids_dist, centroids_cent, metric="euclidean"):
+    """ Computes the clustering mismatch between distributed and centralized k-means clustering on a dataset -- measure of similarity in semantic search
+        test_data: Test data to be clustered
+        centroids_dist: Centroids computed using distriubted k-means clustering
+        centroids_cent: Centroids computed using centralized k-means clustering
+    """
+
+    assert data.shape[1] == centroids_dist.shape[1] == centroids_cent.shape[1], "Mismatch in dimensions of datapoints and centroids!"
+    assert centroids_dist.shape[0] == centroids_cent.shape[0], "No. of centroids for deistributed and centralized is not the same!"
+
+    assignment_dist = assign_to_nearest_centroid(data, centroids_dist, metric)
+    assignment_cent = assign_to_nearest_centroid(data, centroids_cent, metric)
+
+    assert len(assignment_dist) == len(assignment_cent), "Length of distributed and centralized assignments must be the same!"
+
+    differ_count = sum(1 for dist, cent in zip(assignment_dist, assignment_cent) if dist != cent)
+    relative_mismatch = differ_count / len(assignment_cent)
+
+    return relative_mismatch
+
+
 def distributed_kmeans(
     X: np.ndarray = None,
     n_machines: int = 1,
     k: int = 1,
-    max_iterations: int = 100,
+    max_inner_iters: int = 100,
+    max_outer_iters: int = 10,
     partition: str = "uniform",
     consensus_type: str = "perfect",
+    tx_probs_PS: np.ndarray = None,
+    tx_probs_colab: np.ndarray = None,
+    weights: np.ndarray = None,
+    noise: np.ndarray = None,
+    manual_seed=42,
+    metric="euclidean"
 ):
-    """Performs distributed kmeans clustering on each of the machines by splitting the dataset
+    """Performs distributed kmeans clustering on by splitting the dataset
     :param X: Complete dataset
     :param n_machines: Number of machines
     :param k: Number of clusters
-    :param max_iterations: Number of iterations for k-means clustering
+    :param max_iterations: Number of inner iterations for k-means clustering
+    :param max_outer_iters: Number of outer iterations (i.e., consensus at PS) for k-means clustering
     :param partition: Dataset split type
     :param consensus_type: Topology parameters and algorithm used for computing global centroid
+    :param tx_probs_PS: Connection probabilities to the PS
+    :param tx_probs_colab: Connection probabilities for collaboration amongst clients
+    :param weights: Collaboration weights (after optimization)
+    :param noise: Standard deviation of privacy pertubation noise
+    :param manual_seed: Random seed to do a different initial clustering
+    :param metric: Distance metric used for clustering
     Return inertia
     """
 
+    # Check dimension consistency
+    if consensus_type in ["intermittent_sole_good_client_naive", "cluster_no_colab"]:
+        assert tx_probs_PS.shape[0] == n_machines, "Dimension mismatch: tx_prob_ps and n_machines!"
+
+    elif consensus_type in ["intermittent_sole_good_client_pricer", "cluster_pricer"]:
+        assert tx_probs_PS.shape[0] == n_machines, "Dimension mismatch: tx_prob_ps and n_machines!"
+        assert tx_probs_colab.shape[0] == tx_probs_colab.shape[1] == n_machines, "Dimension mismatch: tx_prob_colab and n_machines!"
+        assert weights.shape[0] == weights.shape[1] == n_machines, "Dimension mismatch: collaboration weights and n_machines!"
+        assert noise.shape[0] == noise.shape[1] == n_machines, "Dimension mismatch: privacy noise and n_machines!"
+
     # Split the dataset across different machines
     dim = X.shape[1]
-    X_splits = split_dataset(X, n_machines, partition=partition)
+    X_splits = split_dataset(X, n_machines, partition=partition, manual_seed=manual_seed)
 
     # Initialize the local centroids on each machine using k-means++
-    logger.info(f"Initializing local centroids")
-    local_centroids = [kmeans_plus_plus(X_i, k) for X_i in X_splits]
+    print(f"Initializing local centroids")
+    local_centroids = [kmeans_plus_plus(X_i, k, manual_seed=manual_seed, metric=metric) for X_i in X_splits]
 
     # Run local k-means cluster on each machine
     updated_local_centroids = [None for _ in range(n_machines)]
-    for i in range(n_machines):
-        logger.info(f"Running local k-means on machine {i}/{n_machines}")
-        updated_local_centroids[i] = run_local_kmeans(
-            data=X_splits[i],
-            centroids=local_centroids[i],
-            k=k,
-            max_iterations=max_iterations,
-        )
 
-    # Compute the average of the new centroids to get the global centroid
-    if consensus_type == "perfect":
-        global_centroid = np.mean(np.array(updated_local_centroids), axis=0)
+    for outer_iter in range(max_outer_iters):
 
-    elif consensus_type == "intermittent_sole_good_client_naive":
-        # Intermittent connectivity of clients to PS.
-        #  No collaboration amongst clients
-        logger.info(
-            f"Computing global centroid naively with intermittent connectivity."
-        )
+        # Setting new seeds for every outer iteration so that a fresh intermittent connectivity can be realized
+        np.random.seed((outer_iter + 1) * 1024)
+        torch.manual_seed((outer_iter + 1) * 1024)
 
-        global_centroid = np.zeros([k, dim])
+        print(f"Running outer iteration: {outer_iter}")
 
-        for c_idx in range(k):
-            T = np.zeros([n_machines, dim])
-
-            for mc_idx in range(n_machines):
-                T[mc_idx, :] = updated_local_centroids[mc_idx][c_idx, :]
-
-            global_centroid[c_idx, :] = intermittent_sole_good_client_naive(
-                data=T, n_machines=n_machines
+        for i in range(n_machines):
+            print(f"Running local k-means on machine {i}/{n_machines}")
+            updated_local_centroids[i] = run_local_kmeans(
+                data=X_splits[i],
+                centroids=local_centroids[i],
+                k=k,
+                max_iterations=max_inner_iters,
+                metric=metric
             )
 
-        logger.info(f"Estimated global centroid: {global_centroid}")
-        logger.info(
-            f"True global centroid: {np.mean(np.array(updated_local_centroids), axis=0)}"
-        )
-        logger.info(
-            f"Estimation error (across all centroids): {np.linalg.norm(global_centroid - np.mean(np.array(updated_local_centroids), axis=0), ord='fro')}"
-        )
+        # Compute the average of the new centroids to get the global centroid
+        if consensus_type == "perfect":
+            global_centroid = np.mean(np.array(updated_local_centroids), axis=0)
 
-    elif consensus_type == "intermittent_sole_good_client_pricer_full_colab":
-        # Intermittent connectivity of clients to PS and with each other
-        # Full collaboration amongst clients -- no privacy concerns
-        logger.info(
-            f"Computing global centroid collaboratively with intermittent connectivity: Full collaboration with no privacy constraints."
-        )
+        elif consensus_type in ["intermittent_sole_good_client_naive", "cluster_no_colab"]:
+            # Intermittent connectivity of clients to PS.
+            # No collaboration amongst clients
+            print(
+                f"Computing global centroid with intermittent connectivity and no collaboration amongst nodes."
+            )
 
-        global_centroid = intermittent_sole_good_client_pricer_full_colab(
-            updated_local_centroids
-        )
+            global_centroid = np.zeros([k, dim])
 
-        logger.info(f"Estimated global centroid: {global_centroid}")
-        logger.info(
-            f"True global centroid: {np.mean(np.array(updated_local_centroids), axis=0)}"
-        )
-        logger.info(
-            f"Estimation error (across all centroids): {np.linalg.norm(global_centroid - np.mean(np.array(updated_local_centroids), axis=0), ord='fro')}"
-        )
+            for c_idx in range(k):
+                T = np.zeros([n_machines, dim])
 
-    else:
-        logger.info(f"Consensus type not implemented! Defaulting to perfect consensus")
-        global_centroid = np.mean(np.array(updated_local_centroids), axis=0)
+                for mc_idx in range(n_machines):
+                    T[mc_idx, :] = updated_local_centroids[mc_idx][c_idx, :]
+
+                print(f"Communications from nodes to the PS for each centroid:")
+                global_centroid[c_idx, :] = dme_intermittent_naive(
+                    client_data=T, transmit_probs=tx_probs_PS
+                )
+
+        elif consensus_type in ["intermittent_sole_good_client_pricer", "cluster_pricer"]:
+            # Intermittent connectivity of clients to PS and with each other
+            # Full collaboration amongst clients
+            print(
+                f"Computing global centroid in presence of intermittent connectivity with PriCER"
+            )
+
+            global_centroid = np.zeros([k, dim])
+
+            for c_idx in range(k):
+                T = np.zeros([n_machines, dim])
+
+                for mc_idx in range(n_machines):
+                    T[mc_idx, :] = updated_local_centroids[mc_idx][c_idx, :]
+
+                global_centroid[c_idx, :] = dme_pricer(
+                    transmit_probs=tx_probs_PS,
+                    prob_ngbrs=tx_probs_colab,
+                    client_data=T,
+                    weights=weights,
+                    priv_noise_var=noise,
+                )
+
+        else:
+            print(f"Consensus type not implemented! Defaulting to perfect consensus")
+            global_centroid = np.mean(np.array(updated_local_centroids), axis=0)
+
+        # Broadcast global centroids to all machines.
+        for i in range(n_machines):
+            local_centroids[i] = global_centroid.copy()
 
     # Evaluate clustering accuracy
     inertia = calculate_inertia(X, global_centroid)
 
-    return inertia
+    return inertia, global_centroid
 
 
 def compute_relative_inertia(
@@ -289,113 +409,14 @@ def compute_relative_inertia(
     return inertia_distr / inertia_central
 
 
-def simulate_kmeans(
-    dataset: str = "mnist",
-    n_machines: int = 1,
-    k: int = 1,
-    max_iterations: int = 100,
-    num_realizations: int = 1,
-    partition: str = "uniform",
-    consensus_type: str = "perfect",
-):
-    """Simulate kmeans for different realizations and return average relative inertia
-    :param n_machines: Number of machines
-    :param k: Number of clusters
-    :param max_iterations: Number of iterations for k-means clustering
-    :param num_realizations: Number of realizations to average inertia over
-    :param consensus_type: Topology parameters and algorithm used for computing global centroid
-    Return average relative inertia
-    """
-
-    rel_inertia = []
-
-    if dataset == "mnist":
-        logger.info(f"Loading MNIST dataset for K-means clustering!")
-        X = load_mnist_data()
-
-    elif dataset == "cifar10":
-        logger.info(f"Loading CIFAR-10 dataset for K-means clustering!")
-        X = load_cifar10_data()
-    
-    else:
-        logger.info(f"Dataset not configured!")
-
-    for r in range(num_realizations):
-        logger.info(f"Realization index: {r}")
-        np.random.seed((r + 1) * 1000)
-        relative_inertia = compute_relative_inertia(
-            X=X,
-            n_machines=n_machines,
-            k=k,
-            max_iterations=max_iterations,
-            partition=partition,
-            consensus_type=consensus_type,
-        )
-        rel_inertia.append(relative_inertia)
-        logger.info(f"Realization {r}, Relative inertia: {relative_inertia}")
-
-    return rel_inertia
 
 
-if __name__ == "__main__":
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--n_machines", type=int, default=10, help="Number of machines")
-    parser.add_argument("--k", type=int, default=10, help="Value of k")
-    parser.add_argument(
-        "--max_iterations", type=int, default=10, help="Maximum number of iterations"
-    )
-    parser.add_argument(
-        "--num_realizations", type=int, default=5, help="Number of realizations"
-    )
-    parser.add_argument(
-        "--dataset", type=str, default="mnist", help="Dataset being clustered"
-    )
-    parser.add_argument(
-        "--partition",
-        type=str,
-        default="uniform",
-        help="Type of dataset split across clients",
-    )
-    parser.add_argument(
-        "--consensus_type",
-        type=str,
-        default="perfect",
-        help="Topology parameters and algorithm used for computing global centroid",
-    )
 
-    args = parser.parse_args()
 
-    n_machines = args.n_machines
-    k = args.k
-    max_iterations = args.max_iterations
-    num_realizations = args.num_realizations
-    dataset = args.dataset
-    partition = args.partition
-    consensus_type = args.consensus_type
 
-    logger.info(
-        f"K-means clustering: Dataset: {dataset}, Partition: {partition}, Consensus_type: {consensus_type}"
-    )
-    logger.info(
-        f"n_machines = {n_machines}, k = {k}, max_iterations = {max_iterations}"
-    )
 
-    inertia_arr = simulate_kmeans(
-        dataset=dataset,
-        n_machines=n_machines,
-        k=k,
-        max_iterations=max_iterations,
-        num_realizations=num_realizations,
-        partition=partition,
-        consensus_type=consensus_type,
-    )
 
-    logger.info(
-        f"K-means clustering: Dataset: {dataset}, Partition: {partition}, Consensus_type: {consensus_type}"
-    )
-    logger.info(
-        f"n_machines = {n_machines}, k = {k}, max_iterations = {max_iterations}"
-    )
-    logger.info(
-        f"Inertia: Mean = {np.mean(inertia_arr):.3f}, Std. dev = {np.std(inertia_arr):.3f}"
-    )
+
+
+
+
