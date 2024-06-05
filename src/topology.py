@@ -1,11 +1,12 @@
 # Functions to generate different network topologies
 
 import numpy as np
+import torch
 
 
 def client_locations_mmWave_clusters_intermittent(num_clients: int = 10):
     """mmWave network topology definition
-    :param num_clients: Number of federated edge learning clients
+    :param num_clients: Number of edge learning clients
     :return: probability of successful transmission to PS, and inter-client connectivity matrix
     """
 
@@ -108,4 +109,6 @@ def client_locations_mmWave_clusters_intermittent(num_clients: int = 10):
     with open("connectivity_mat_clients.npy", "wb") as f:
         np.save(f, connectivity_mat_clients)
 
-    return prob_success_PS, P, connectivity_mat_clients
+    return torch.Tensor(prob_success_PS), torch.Tensor(P), torch.Tensor(connectivity_mat_clients)
+
+
